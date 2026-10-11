@@ -1,0 +1,24 @@
+node_modules/
+.env
+.env.*
+!.env.example
+
+# Local database and SQLite journal files
+data.db
+data.db-wal
+data.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime data
+uploads/
+backups/
+client/dist/
+server/dist/
+local-staging/
+
+# Logs and OS cruft
+*.log
+.DS_Store
+Thumbs.db

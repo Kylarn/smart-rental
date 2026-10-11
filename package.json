@@ -1,0 +1,25 @@
+{
+  "name": "smart-rentals",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Smart Rentals - Modern rental management platform for Kenya",
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev --workspace server\" \"npm run dev --workspace client\"",
+    "dev:server": "npm run dev --workspace server",
+    "dev:client": "npm run dev --workspace client",
+    "seed": "npm run seed --workspace server",
+    "build": "npm run build --workspace client",
+    "start": "npm run start --workspace server",
+    "test:api": "npm run test:api --workspace server",
+    "test:smoke": "npm run test:smoke --workspace server",
+    "test:backup": "npm run test:backup --workspace server",
+    "db:backup": "node server/scripts/backup.js"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

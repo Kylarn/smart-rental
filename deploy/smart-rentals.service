@@ -1,0 +1,21 @@
+[Unit]
+Description=Smart Rentals (Node/Express + SQLite)
+After=network.target
+
+[Service]
+Type=simple
+User=smartrentals
+Group=smartrentals
+WorkingDirectory=/opt/smart-rentals
+EnvironmentFile=/etc/smart-rentals/.env
+ExecStart=/usr/bin/node server/src/index.js
+Restart=always
+RestartSec=5
+# Basic hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/smart-rentals
+
+[Install]
+WantedBy=multi-user.target

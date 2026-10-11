@@ -1,0 +1,21 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: smart-rentals:staging
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      DB_PATH: /data/data.db
+      UPLOADS_DIR: /data/uploads
+      BACKUP_DIR: /data/backups
+      COOKIE_SECURE: "1"
+    ports:
+      - "4000:4000"
+    volumes:
+      - smart-rentals-data:/data
+
+volumes:
+  smart-rentals-data:
