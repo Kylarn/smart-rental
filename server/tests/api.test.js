@@ -1784,6 +1784,135 @@ await test('uploads require auth, reject spoofed types, and use unguessable file
   assert.equal(bad.status, 400, 'content that does not match the declared type is rejected');
 });
 
+await test('utility bills: per-unit issue, tenant scoping, payment lock and validation', async () => {
+  const period = ymOff(0);
+  const { landlord, prop, unit, tenant } = await acctScenario({
+    landlordEmail: 'ub1.l@test.ke',
+    tenantEmail: 'ub1.t@test.ke',
+    rent: 10000,
+    start: '2026-01-05',
+    end: '2027-01-05',
+    unitNo: 'UB1',
+  });
+  const other = session();
+  await register(other, { role: 'landlord', full_name: 'Other L', email: 'ub.other@test.ke' });
+
+  assert.equal((await fetch(`${base}/api/utility-bills`)).status, 401, 'bills listing requires auth');
+
+  const created = await landlord.request('POST', '/api/utility-bills', {
+    property_id: prop.id,
+    unit_id: unit.id,
+    category: 'Water',
+    period,
+    amount: 750,
+  });
+  assert.equal(created.status, 201);
+  const bill = (await created.json()).bill;
+  assert.equal(bill.tenant_id, tenant.tenant_id, 'bill is assigned to the unit active tenant');
+  assert.equal(bill.status, 'unpaid');
+
+  assert.equal(
+    (await landlord.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: unit.id, category: 'Water', period, amount: 800 })).status,
+    409,
+    'duplicate unit + period + category is rejected'
+  );
+  assert.equal(
+    (await landlord.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: unit.id, category: 'Water', period: '2026-13', amount: 100 })).status,
+    400,
+    'invalid period is rejected'
+  );
+  assert.equal(
+    (await landlord.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: unit.id, category: 'Water', period: ymOff(1), amount: 0 })).status,
+    400,
+    'non-positive amount is rejected'
+  );
+  assert.equal(
+    (await landlord.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: unit.id, category: 'Plasma', period: ymOff(1), amount: 100 })).status,
+    400,
+    'unknown category is rejected'
+  );
+
+  const vacant = (await (await landlord.request('POST', '/api/units', { property_id: prop.id, unit_number: 'UB2', unit_type: 'Studio', rent: 9000 })).json()).unit;
+  assert.equal(
+    (await landlord.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: vacant.id, category: 'Water', period, amount: 100 })).status,
+    400,
+    'a vacant unit cannot be billed'
+  );
+
+  assert.equal(
+    (await other.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: unit.id, category: 'Water', period: ymOff(2), amount: 100 })).status,
+    403,
+    'a non-owning landlord cannot issue bills'
+  );
+  assert.equal((await other.request('GET', `/api/utility-bills/${bill.id}`)).status, 403, 'a non-owning landlord cannot read the bill');
+
+  const tenantS = session();
+  assert.equal((await tenantS.request('POST', '/api/auth/login', { email: 'ub1.t@test.ke', password: 'Tenant@123' })).status, 200);
+  const list = await (await tenantS.request('GET', '/api/utility-bills')).json();
+  assert.equal(list.bills.length, 1, 'tenant sees exactly their own bill');
+  assert.equal(list.bills[0].id, bill.id);
+  assert.equal(list.stats.unpaid, 750);
+
+  assert.equal(
+    (await tenantS.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: unit.id, category: 'Water', period: ymOff(3), amount: 100 })).status,
+    403,
+    'tenant cannot issue bills'
+  );
+  assert.equal((await tenantS.request('POST', `/api/utility-bills/${bill.id}/pay`, { method: 'cash' })).status, 403, 'tenant cannot settle a bill');
+
+  assert.equal((await landlord.request('POST', `/api/utility-bills/${bill.id}/pay`, { method: 'mpesa', reference: 'MPE123' })).status, 200);
+  assert.equal((await landlord.request('POST', `/api/utility-bills/${bill.id}/pay`, {})).status, 400, 'a bill cannot be paid twice');
+  assert.equal((await landlord.request('PATCH', `/api/utility-bills/${bill.id}`, { amount: 1 })).status, 400, 'paid bills cannot be edited');
+  assert.equal((await landlord.request('DELETE', `/api/utility-bills/${bill.id}`)).status, 400, 'paid bills cannot be deleted');
+
+  const after = await (await tenantS.request('GET', '/api/utility-bills')).json();
+  assert.equal(after.stats.unpaid, 0);
+  assert.equal(after.stats.paid, 750);
+
+  const created2 = await landlord.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: unit.id, category: 'Electricity', period, amount: 1200 });
+  assert.equal(created2.status, 201);
+  const bill2 = (await created2.json()).bill;
+  const patched = await landlord.request('PATCH', `/api/utility-bills/${bill2.id}`, { amount: 1300 });
+  assert.equal(patched.status, 200);
+  assert.equal((await patched.json()).bill.amount, 1300, 'unpaid bills are editable');
+  assert.equal((await landlord.request('DELETE', `/api/utility-bills/${bill2.id}`)).status, 200, 'unpaid bills can be deleted');
+});
+
+await test('utility bills: caretaker only manages assigned properties', async () => {
+  const period = ymOff(0);
+  const { landlord, prop, unit } = await acctScenario({
+    landlordEmail: 'ub2.l@test.ke',
+    tenantEmail: 'ub2.t@test.ke',
+    rent: 9000,
+    start: '2026-01-05',
+    end: '2027-01-05',
+    unitNo: 'UB1',
+  });
+  const prop2 = (await (await landlord.request('POST', '/api/properties', { name: 'UB Unassigned', county: 'Nairobi', property_type: 'Apartment' })).json()).property;
+
+  const assigned = await landlord.request('POST', `/api/properties/${prop.id}/caretakers`, {
+    full_name: 'UB Caretaker',
+    email: 'ub.care@test.ke',
+    phone: '0722333444',
+    password: 'Caretaker@123',
+  });
+  assert.equal(assigned.status, 201);
+
+  await landlord.request('POST', '/api/utility-bills', { property_id: prop.id, unit_id: unit.id, category: 'Water', period, amount: 500 });
+
+  const care = session();
+  assert.equal((await care.request('POST', '/api/auth/login', { email: 'ub.care@test.ke', password: 'Caretaker@123' })).status, 200);
+  const list = await (await care.request('GET', '/api/utility-bills')).json();
+  assert.equal(list.bills.length, 1, 'caretaker sees assigned property bills');
+  assert.equal(list.bills[0].property_id, prop.id);
+
+  assert.equal(
+    (await care.request('POST', '/api/utility-bills', { property_id: prop2.id, unit_id: unit.id, category: 'Water', period: ymOff(3), amount: 100 })).status,
+    403,
+    'caretaker cannot bill an unassigned property'
+  );
+});
+
 server.close();
 await new Promise((resolve) => server.on('close', resolve));try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

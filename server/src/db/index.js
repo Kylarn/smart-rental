@@ -240,6 +240,25 @@ CREATE TABLE IF NOT EXISTS expenses (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS utility_bills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  unit_id INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+  tenant_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category TEXT NOT NULL DEFAULT 'Water' CHECK (category IN ('Water','Electricity','Garbage','Internet','Other')),
+  period TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  status TEXT NOT NULL DEFAULT 'unpaid' CHECK (status IN ('unpaid','paid')),
+  paid_at TEXT,
+  payment_method TEXT,
+  payment_reference TEXT,
+  paid_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(unit_id, period, category)
+);
+
 CREATE INDEX IF NOT EXISTS idx_units_property ON units(property_id);
 CREATE INDEX IF NOT EXISTS idx_leases_unit ON leases(unit_id);
 CREATE INDEX IF NOT EXISTS idx_leases_tenant ON leases(tenant_id);
@@ -255,6 +274,10 @@ CREATE INDEX IF NOT EXISTS idx_move_outs_lease ON move_outs(lease_id);
 CREATE INDEX IF NOT EXISTS idx_move_outs_property ON move_outs(property_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_property ON expenses(property_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+CREATE INDEX IF NOT EXISTS idx_utility_bills_property ON utility_bills(property_id);
+CREATE INDEX IF NOT EXISTS idx_utility_bills_unit ON utility_bills(unit_id);
+CREATE INDEX IF NOT EXISTS idx_utility_bills_tenant ON utility_bills(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_utility_bills_status ON utility_bills(status);
 `;
 
 let db = null;

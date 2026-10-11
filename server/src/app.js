@@ -18,6 +18,7 @@ import applicationRoutes from './routes/applications.js';
 import paymentRoutes from './routes/payments.js';
 import maintenanceRoutes from './routes/maintenance.js';
 import expenseRoutes from './routes/expenses.js';
+import utilityBillRoutes from './routes/utilityBills.js';
 import communicationRoutes from './routes/communications.js';
 import dashboardRoutes from './routes/dashboard.js';
 import reportRoutes from './routes/reports.js';
@@ -72,6 +73,7 @@ export function createApp() {
   app.use('/api/payments', paymentRoutes);
   app.use('/api/maintenance', maintenanceRoutes);
   app.use('/api/expenses', expenseRoutes);
+  app.use('/api/utility-bills', utilityBillRoutes);
   app.use('/api', communicationRoutes);
   app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/reports', reportRoutes);

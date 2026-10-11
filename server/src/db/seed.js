@@ -425,6 +425,25 @@ activeLeases.forEach((lease) => {
   }
 });
 
+const billSeed = activeLeases.length ? [activeLeases[0]] : [];
+billSeed.forEach((lease) => {
+  const now = new Date();
+  const cur = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevKey = `${prev.getFullYear()}-${pad(prev.getMonth() + 1)}`;
+  insert(
+    `INSERT INTO utility_bills (property_id, unit_id, tenant_id, category, period, amount, status, notes)
+     VALUES (?, ?, ?, 'Water', ?, 750, 'unpaid', 'Shared meter reading for the flat')`,
+    [lease.propertyId, lease.unit_id, lease.tenantId, cur]
+  );
+  const paidAt = new Date(Date.now() - 86400000 * 6);
+  insert(
+    `INSERT INTO utility_bills (property_id, unit_id, tenant_id, category, period, amount, status, paid_at, payment_method, payment_reference, notes)
+     VALUES (?, ?, ?, 'Electricity', ?, 1400, 'paid', ?, 'mpesa', ?, 'KPLC bill settled')`,
+    [lease.propertyId, lease.unit_id, lease.tenantId, prevKey, iso(paidAt), `MPE${Math.floor(Math.random() * 1e8)}`]
+  );
+});
+
 const maintenanceSeeds = [
   ['Leaking kitchen sink', 'Water is dripping under the kitchen sink and the cabinet is getting damaged.', 'Plumbing', 'high', 'in_progress', 'kilimani', 'John plumber - 0711223344', 2500],
   ['Broken window latch', 'Bedroom window latch broke, cannot lock the window at night.', 'Carpentry', 'medium', 'submitted', 'westlands', '', null, 'tenant'],
@@ -576,6 +595,7 @@ const counts = {
   payments: all('SELECT COUNT(*) AS c FROM payments')[0].c,
   maintenance: all('SELECT COUNT(*) AS c FROM maintenance_requests')[0].c,
   applications: all('SELECT COUNT(*) AS c FROM applications')[0].c,
+  utilityBills: all('SELECT COUNT(*) AS c FROM utility_bills')[0].c,
 };
 
 console.log('Seed complete:', counts);

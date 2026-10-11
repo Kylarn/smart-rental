@@ -7,9 +7,9 @@ Rental property management platform for Kenya. Landlords and caretakers manage b
 | Role | Capabilities |
 |---|---|
 | **Admin** | Manage users (landlord/tenant/caretaker), platform settings, audit log, platform-wide reports |
-| **Landlord** | Publish properties, add units, create/manage leases and tenants, assign & remove caretakers, approve rental applications, view payments/arrears/reports (CSV export), post announcements, manage expenses for their own portfolio |
-| **Caretaker** | Works only on assigned properties: manage tenants/units, accept & assign rental applications (creating the lease), record rent/expenses, handle maintenance, post announcements |
-| **Tenant** | Browse & apply to listed properties, view own lease & arrears, pay rent (M-Pesa), raise maintenance, message landlord, see announcements |
+| **Landlord** | Publish properties, add units, create/manage leases and tenants, assign & remove caretakers, approve rental applications, view payments/arrears/reports (CSV export), post announcements, manage expenses and issue/reconcile utility bills for their own portfolio |
+| **Caretaker** | Works only on assigned properties: manage tenants/units, accept & assign rental applications (creating the lease), record rent/expenses, issue utility bills, handle maintenance, post announcements |
+| **Tenant** | Browse & apply to listed properties, view own lease & arrears, pay rent (M-Pesa), view utility bills, raise maintenance, message landlord, see announcements |
 
 The link between a tenant and a building is a **lease**. A tenant applies to a listed property (or is added directly by the landlord/caretaker), and once a unit is assigned a lease is created — that lease scopes everything the tenant sees.
 
@@ -25,8 +25,8 @@ The link between a tenant and a building is a **lease**. A tenant applies to a l
 
 ```
 server/src/            Express API: routes, middleware, services (payments, rent, notify, scheduler)
-server/src/db/         schema (bootstrap.js), seed.js, db access
-server/tests/          api.test.js (53), smoke.mjs (19), backup.restore.mjs (5) suites
+server/src/db/         schema (index.js), seed.js, db access
+server/tests/          api.test.js (55), smoke.mjs (19), backup.restore.mjs (5) suites
 client/src/            React SPA (pages, components, lib)
 deploy/                Dockerfile, compose, nginx, systemd unit, staging & verification docs
 ```
@@ -45,7 +45,7 @@ npm run dev            # server (node --watch) + client (Vite) together
 
 ### Seed demo data
 
-Resets the database at `DB_PATH` (default `<repo root>/data.db`) with demo accounts, 6 properties, 50 units, 1 tenant lease, maintenance, applications, notifications and settings:
+Resets the database at `DB_PATH` (default `<repo root>/data.db`) with demo accounts, 6 properties, 50 units, 1 tenant lease, maintenance, applications, utility bills, notifications and settings:
 
 ```bash
 npm run seed
@@ -78,8 +78,8 @@ See `.env.example` for every variable. Key ones:
 All suites run against disposable databases and never touch your real data db.
 
 ```bash
-npm run test:api      # 53 API/regression tests (auth, leases, M-Pesa, receipts, maintenance,
-                      # expenses, caretaker scoping, applications, admin, CSV, messages, uploads)
+npm run test:api      # 55 API/regression tests (auth, leases, M-Pesa, receipts, maintenance,
+                      # expenses, utility bills, caretaker scoping, applications, admin, CSV, messages, uploads)
 npm run test:smoke    # 19 e2e smoke checks against the running server (logins, SPA routes, isolation)
 npm run test:backup   # backup/restore round-trip + integrity
 npm run build         # client production build (Vite)

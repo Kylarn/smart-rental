@@ -20,6 +20,8 @@ const Applications = lazy(() => import('./pages/Applications.jsx'));
 const Payments = lazy(() => import('./pages/Payments.jsx'));
 const Maintenance = lazy(() => import('./pages/Maintenance.jsx'));
 const Expenses = lazy(() => import('./pages/Expenses.jsx'));
+const UtilityBills = lazy(() => import('./pages/UtilityBills.jsx'));
+const MyBills = lazy(() => import('./pages/MyBills.jsx'));
 const MoveOuts = lazy(() => import('./pages/MoveOuts.jsx'));
 const Messages = lazy(() => import('./pages/Messages.jsx'));
 const Announcements = lazy(() => import('./pages/Announcements.jsx'));
@@ -76,6 +78,8 @@ export default function App() {
           <Route path="payments" element={<Payments />} />
           <Route path="maintenance" element={<Maintenance />} />
           <Route path="expenses" element={<Expenses />} />
+          <Route path="bills" element={<UtilityBills />} />
+          <Route path="my-bills" element={<MyBills />} />
           <Route path="moveouts" element={<MoveOuts />} />
           <Route path="messages" element={<Messages />} />
           <Route path="announcements" element={<Announcements />} />

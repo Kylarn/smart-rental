@@ -69,6 +69,8 @@ const STATUS_TONES = {
   suspended: 'red',
   archived: 'gray',
   expiring: 'amber',
+  paid: 'green',
+  unpaid: 'red',
 };
 
 export function StatusBadge({ status, label }) {
