@@ -3,6 +3,7 @@ import { all, get, insert, run } from '../db/index.js';
 import { asyncHandler, notFound, forbidden, badRequest, validate, parseJson } from '../utils/helpers.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { audit, notify } from '../services/notify.js';
+import { smsEvents } from '../services/sms/events.js';
 import { upload, fileUrl } from '../middleware/upload.js';
 import { isCaretakerOfProperty } from '../services/rent.js';
 
@@ -120,6 +121,7 @@ router.post(
 
     const category = req.body.category || 'General';
     const isComplaint = String(category).toLowerCase().includes('complaint');
+    const priority = req.body.priority || 'medium';
     const id = insert(
       `INSERT INTO maintenance_requests (property_id, unit_id, tenant_id, title, description, category, priority, status, photos, estimated_cost)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', ?, ?)`,
@@ -130,7 +132,7 @@ router.post(
         String(req.body.title).trim(),
         String(req.body.description).trim(),
         category,
-        req.body.priority || 'medium',
+        priority,
         JSON.stringify(req.body.photos || []),
         req.body.estimated_cost ? Number(req.body.estimated_cost) : null,
       ]
@@ -141,7 +143,7 @@ router.post(
       notify(c.caretaker_id, {
         type: 'maintenance',
         title: isComplaint ? 'New complaint' : 'New maintenance request',
-        body: `${req.body.title} (${req.body.priority} priority).`,
+        body: `${req.body.title} (${priority} priority).`,
         link: '/caretaker/maintenance',
         dedupeKey: `maint-caretaker-${id}`,
       })
@@ -150,7 +152,7 @@ router.post(
       notify(p.landlord_id, {
         type: 'maintenance',
         title: isComplaint ? 'New complaint' : 'New maintenance request',
-        body: `${req.body.title} (${req.body.priority} priority).`,
+        body: `${req.body.title} (${priority} priority).`,
         link: '/landlord/maintenance',
         dedupeKey: `maint-${id}`,
       })
@@ -216,6 +218,15 @@ router.patch(
           link: '/tenant/maintenance',
           dedupeKey: `maint-update-${id}-${updates.status || keys.join('-')}`,
         });
+        if (updates.status) {
+          smsEvents.maintenanceUpdate({
+            userId: row.tenant_id,
+            requestId: id,
+            propertyId: row.property_id,
+            title: row.title,
+            status: updates.status,
+          });
+        }
       }
       audit(req, 'maintenance.updated', 'maintenance', id, { fields: keys, status: updates.status }, { property_id: row.property_id });
     }

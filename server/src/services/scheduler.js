@@ -1,6 +1,9 @@
 import { all, get } from '../db/index.js';
 import { notify } from './notify.js';
 import { leaseArrears } from './rent.js';
+import { smsEvents } from './sms/events.js';
+import { flushSmsQueue } from './sms/index.js';
+import { monthLabel, formatDate } from '../utils/helpers.js';
 
 function setting(key, fallback) {
   const row = get('SELECT value FROM settings WHERE key = ?', [key]);
@@ -8,7 +11,7 @@ function setting(key, fallback) {
 }
 
 export function runRentReminders() {
-  const leases = all(`SELECT * FROM leases WHERE status = 'active'`);
+  const leases = all(`SELECT l.*, u.unit_number FROM leases l LEFT JOIN units u ON u.id = l.unit_id WHERE l.status = 'active'`);
   const now = new Date();
   const ymd = (d) => d.toISOString().slice(0, 10);
   let created = 0;
@@ -27,11 +30,20 @@ export function runRentReminders() {
       const id = notify(lease.tenant_id, {
         type: 'reminder',
         title: 'Rent due soon',
-        body: `KES ${Number(lease.rent).toLocaleString('en-KE')} rent for ${currentPeriod} is due on ${ymd(dueDate)}.`,
+        body: `KES ${Number(lease.rent).toLocaleString('en-KE')} rent for ${monthLabel(currentPeriod)} is due on ${formatDate(dueDate)}.`,
         link: '/tenant/payments',
         dedupeKey: `rent-due-${lease.id}-${currentPeriod}`,
       });
       if (id) created += 1;
+      smsEvents.rentDue({
+        userId: lease.tenant_id,
+        leaseId: lease.id,
+        propertyId: lease.property_id,
+        period: currentPeriod,
+        amount: lease.rent,
+        dueDate: ymd(dueDate),
+        dedupeKey: `sms-rent-due-${lease.id}-${currentPeriod}`,
+      });
     } else if (daysUntilDue <= 0 && arrears.total > 0) {
       const id = notify(lease.tenant_id, {
         type: 'warning',
@@ -41,12 +53,20 @@ export function runRentReminders() {
         dedupeKey: `rent-overdue-${lease.id}-${currentPeriod}`,
       });
       if (id) created += 1;
+      smsEvents.rentOverdue({
+        userId: lease.tenant_id,
+        leaseId: lease.id,
+        propertyId: lease.property_id,
+        amount: arrears.total,
+        months: arrears.months,
+        dedupeKey: `sms-rent-overdue-${lease.id}-${currentPeriod}`,
+      });
       if (lease.property_id) {
         all('SELECT landlord_id FROM properties WHERE id = ?', [lease.property_id]).forEach((p) => {
           const n = notify(p.landlord_id, {
             type: 'warning',
             title: 'Tenant in arrears',
-            body: `${tenant.full_name} owes KES ${arrears.total.toLocaleString('en-KE')} on Unit ${lease.unit_id}.`,
+            body: `${tenant.full_name} owes KES ${arrears.total.toLocaleString('en-KE')} on Unit ${lease.unit_number || lease.unit_id}.`,
             link: '/landlord/payments',
             dedupeKey: `rent-overdue-ll-${lease.id}-${currentPeriod}`,
           });
@@ -74,14 +94,14 @@ export function runLeaseExpiryCheck() {
     const n1 = notify(l.tenant_id, {
       type: 'warning',
       title: 'Lease expiring soon',
-      body: `Your lease for Unit ${l.unit_number} at ${l.property_name} ends on ${l.end_date}.`,
+      body: `Your lease for Unit ${l.unit_number} at ${l.property_name} ends on ${formatDate(l.end_date)}.`,
       link: '/tenant/lease',
       dedupeKey: key,
     });
     const n2 = notify(l.landlord_id, {
       type: 'warning',
       title: 'Lease expiring soon',
-      body: `${l.tenant_name}'s lease for Unit ${l.unit_number} ends on ${l.end_date}.`,
+      body: `${l.tenant_name}'s lease for Unit ${l.unit_number} ends on ${formatDate(l.end_date)}.`,
       link: '/landlord/leases',
       dedupeKey: `${key}-ll`,
     });
@@ -99,6 +119,7 @@ export function startScheduler() {
       const a = runRentReminders();
       const b = runLeaseExpiryCheck();
       if (a || b) console.log(`[scheduler] created ${a} rent + ${b} lease notifications`);
+      flushSmsQueue().catch((err) => console.error('[scheduler] sms flush error', err.message));
     } catch (err) {
       console.error('[scheduler] error', err);
     }

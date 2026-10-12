@@ -106,8 +106,10 @@ sudo chmod 640 /etc/smart-rentals/.env
 sudo -u smartrentals bash -lc 'cd /opt/smart-rentals && DB_PATH=/var/lib/smart-rentals/data.db npm run seed'
 ```
 
-This creates a **separate** staging DB with the demo/test accounts listed in `DEPLOYMENT.md`
-(`admin@smartrentals.co.ke / Admin@123`, etc.). The original developer `data.db` is untouched.
+This creates a **separate** staging DB containing the admin account listed in `DEPLOYMENT.md`
+(`admin@smartrentals.co.ke / Admin@123`) plus a suspended placeholder owner. No demo
+landlord/caretaker/tenant logins are created — register or add those through the UI. The original
+developer `data.db` is untouched.
 
 ## 6. Run the app under systemd
 

@@ -71,6 +71,21 @@ const STATUS_TONES = {
   expiring: 'amber',
   paid: 'green',
   unpaid: 'red',
+  queued: 'amber',
+  sent: 'blue',
+  delivered: 'green',
+  initiated: 'amber',
+  not_applicable: 'gray',
+  held: 'blue',
+  refunded: 'gray',
+  forfeited: 'red',
+  verified: 'green',
+  moved_out: 'gray',
+  caretaker_accommodation: 'purple',
+  low: 'gray',
+  medium: 'amber',
+  high: 'red',
+  urgent: 'red',
 };
 
 export function StatusBadge({ status, label }) {

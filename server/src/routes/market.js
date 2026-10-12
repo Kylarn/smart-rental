@@ -2,10 +2,22 @@ import express from 'express';
 import { all, get, insert } from '../db/index.js';
 import { asyncHandler, validate, notFound, badRequest, normalizePhone } from '../utils/helpers.js';
 import { optionalAuth } from '../middleware/auth.js';
+import { rateLimit, envMax } from '../middleware/rateLimit.js';
 import { notify, audit } from '../services/notify.js';
+import { smsEvents } from '../services/sms/events.js';
 import { parseJson } from '../utils/helpers.js';
 
 const router = express.Router();
+
+const publicApplyLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: envMax('RATE_LIMIT_PUBLIC_APPLY_MAX', 20),
+  keyPrefix: 'public-apply',
+});
+
+function applicationReference(id) {
+  return `APP-${String(id).padStart(6, '0')}`;
+}
 
 function decorate(p) {
   return {
@@ -32,9 +44,9 @@ router.get(
     const { search, county, type, minPrice, maxPrice, bedrooms, sort = 'newest' } = req.query;
     let rows = all(
       `SELECT p.*, u.full_name AS landlord_name, u.phone AS landlord_phone,
-              (SELECT MIN(rent) FROM units WHERE property_id = p.id AND status = 'vacant') AS min_rent,
-              (SELECT MAX(rent) FROM units WHERE property_id = p.id AND status = 'vacant') AS max_rent,
-              (SELECT COUNT(*) FROM units WHERE property_id = p.id AND status = 'vacant') AS available_units,
+              (SELECT MIN(rent) FROM units WHERE property_id = p.id AND status = 'vacant' AND occupancy_known = 1) AS min_rent,
+              (SELECT MAX(rent) FROM units WHERE property_id = p.id AND status = 'vacant' AND occupancy_known = 1) AS max_rent,
+              (SELECT COUNT(*) FROM units WHERE property_id = p.id AND status = 'vacant' AND occupancy_known = 1) AS available_units,
               (SELECT COUNT(*) FROM units WHERE property_id = p.id) AS total_units
        FROM properties p
        JOIN users u ON u.id = p.landlord_id
@@ -58,7 +70,9 @@ router.get(
     if (bedrooms) {
       const n = Number(bedrooms);
       rows = rows.filter((p) => {
-        const units = all('SELECT bedrooms, status FROM units WHERE property_id = ?', [p.id]).filter((u) => u.status === 'vacant');
+        const units = all('SELECT bedrooms, status, occupancy_known FROM units WHERE property_id = ?', [p.id]).filter(
+          (u) => u.status === 'vacant' && u.occupancy_known !== 0
+        );
         if (!units.length) return false;
         return n >= 3 ? units.some((u) => u.bedrooms >= 3) : units.some((u) => u.bedrooms === n);
       });
@@ -108,6 +122,7 @@ router.get(
 
 router.post(
   '/properties/:id/apply',
+  publicApplyLimit,
   optionalAuth,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
@@ -123,18 +138,28 @@ router.post(
 
     let unitId = req.body.unit_id ? Number(req.body.unit_id) : null;
     if (unitId) {
-      const unit = get('SELECT id, status FROM units WHERE id = ? AND property_id = ?', [unitId, id]);
+      const unit = get('SELECT id, status, occupancy_known FROM units WHERE id = ? AND property_id = ?', [unitId, id]);
       if (!unit) throw badRequest('Selected unit is not available on this property', { unit_id: 'Invalid unit' });
-      if (unit.status !== 'vacant') throw badRequest('Selected unit is no longer vacant', { unit_id: 'Unit is occupied' });
+      if (unit.status !== 'vacant' || unit.occupancy_known === 0)
+        throw badRequest('Selected unit is no longer vacant', { unit_id: 'Unit is occupied' });
     }
 
     const applicantId = req.user?.id || null;
+    const email = String(req.body.email).trim().toLowerCase();
+    const phone = normalizePhone(req.body.phone);
     if (applicantId) {
       const existing = get(
         `SELECT id FROM applications WHERE applicant_id = ? AND property_id = ? AND status IN ('pending','under_review','info_requested','approved')`,
         [applicantId, id]
       );
       if (existing) throw badRequest('You already have an active application for this property');
+    } else {
+      const existing = get(
+        `SELECT id FROM applications WHERE property_id = ? AND status IN ('pending','under_review','info_requested','approved')
+         AND (lower(email) = ? OR phone = ?) ORDER BY id DESC LIMIT 1`,
+        [id, email, phone]
+      );
+      if (existing) throw badRequest('An application for this property already exists for these contact details');
     }
 
     const applicationId = insert(
@@ -145,8 +170,8 @@ router.post(
         unitId,
         applicantId,
         String(req.body.full_name).trim(),
-        String(req.body.email).trim().toLowerCase(),
-        normalizePhone(req.body.phone),
+        email,
+        phone,
         req.body.move_in_date,
         Number(req.body.occupants || 1),
         req.body.message || '',
@@ -170,18 +195,47 @@ router.post(
         dedupeKey: `application-tenant-${applicationId}`,
       });
     }
-    audit(req, 'application.created', 'application', applicationId, { property_id: id });
+    audit(req, 'application.created', 'application', applicationId, { property_id: id, anonymous: !applicantId });
 
     res.status(201).json({
       ok: true,
       message: 'Application submitted successfully! The property manager will review it shortly.',
       applicationId,
+      reference: applicationReference(applicationId),
+    });
+  })
+);
+
+router.get(
+  '/applications/status',
+  asyncHandler(async (req, res) => {
+    const reference = String(req.query.reference || '').trim().toUpperCase();
+    const email = String(req.query.email || '').trim().toLowerCase();
+    const match = /^APP-(\d+)$/.exec(reference);
+    if (!match || !email) {
+      throw badRequest('Provide your application reference and the email you applied with');
+    }
+    const app = get(
+      `SELECT a.id, a.status, a.created_at, a.updated_at, a.reviewer_notes, p.name AS property_name
+       FROM applications a JOIN properties p ON p.id = a.property_id
+       WHERE a.id = ? AND lower(a.email) = ?`,
+      [Number(match[1]), email]
+    );
+    if (!app) throw notFound('No application matches those details');
+    res.json({
+      reference,
+      status: app.status,
+      property_name: app.property_name,
+      submitted_at: app.created_at,
+      updated_at: app.updated_at,
+      message: app.reviewer_notes || null,
     });
   })
 );
 
 router.post(
   '/properties/:id/contact',
+  publicApplyLimit,
   optionalAuth,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
@@ -222,12 +276,13 @@ router.post(
       link: '/landlord/messages',
       dedupeKey: `msg-${messageId}`,
     });
-    res.status(201).json({ ok: true, message: 'Your message has been sent to the property manager.' });
+    res.status(201).json({ ok: true, message: 'Your message has been sent to the landlord.' });
   })
 );
 
 router.post(
   '/properties/:id/viewing',
+  publicApplyLimit,
   optionalAuth,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
@@ -245,7 +300,7 @@ router.post(
         `INSERT INTO users (role, full_name, email, phone, password_hash, status) VALUES ('tenant', ?, ?, ?, ?, 'active')`,
         [
           String(req.body.name).trim(),
-          String(req.body.email || `viewing-${Date.now()}@smartrentals.co.ke`).trim().toLowerCase(),
+          String(req.body.email || `viewing-${Date.now()}@smartrentals.local`).trim().toLowerCase(),
           normalizePhone(req.body.phone),
           await bcryptHash(),
         ]

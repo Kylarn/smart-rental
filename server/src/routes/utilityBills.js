@@ -3,6 +3,7 @@ import { all, get, insert, run } from '../db/index.js';
 import { asyncHandler, badRequest, notFound, forbidden, conflict, validate } from '../utils/helpers.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { audit, notify } from '../services/notify.js';
+import { smsEvents } from '../services/sms/events.js';
 import { activeLeaseOfUnit, isCaretakerOfProperty, managedPropertyIds, placeholders } from '../services/rent.js';
 
 const router = express.Router();
@@ -180,12 +181,20 @@ router.post(
       link: '/app/my-bills',
       dedupeKey: `bill-created-${id}`,
     });
+    smsEvents.billCreated({
+      userId: lease.tenant_id,
+      billId: id,
+      propertyId,
+      category,
+      periodLabel: monthLabel(period),
+      amount,
+    });
     audit(req, 'utility_bill.created', 'utility_bill', id, {
       unit_id: unitId,
       period,
       category,
       amount,
-      tenant_id: lease.tenantId,
+      tenant_id: lease.tenant_id,
     }, { property_id: propertyId });
 
     const bill = get(`${SELECT_BILL} WHERE b.id = ?`, [id]);
@@ -270,6 +279,14 @@ router.post(
       body: `Your ${monthLabel(bill.period)} ${String(bill.category).toLowerCase()} bill of KES ${Number(bill.amount).toLocaleString('en-KE')} for Unit ${bill.unit_number} has been settled.`,
       link: '/app/my-bills',
       dedupeKey: `bill-paid-${bill.id}`,
+    });
+    smsEvents.billPaid({
+      userId: bill.tenant_id,
+      billId: bill.id,
+      propertyId: bill.property_id,
+      category: bill.category,
+      periodLabel: monthLabel(bill.period),
+      amount: bill.amount,
     });
     audit(req, 'utility_bill.paid', 'utility_bill', bill.id, {
       method,

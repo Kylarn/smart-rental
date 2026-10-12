@@ -114,7 +114,7 @@ export default function Expenses() {
           <div className="table-wrap">
             <table className="data">
               <thead>
-                <tr><th>Date</th><th>Property</th><th>Unit</th><th>Category</th><th>Description</th><th>Vendor</th><th className="num">Amount</th><th></th></tr>
+                <tr><th>Date</th><th>Property</th><th>Unit</th><th>Category</th><th>Description</th><th>Vendor</th><th className="text-right">Amount</th><th></th></tr>
               </thead>
               <tbody>
                 {items.map((e) => (
@@ -125,7 +125,7 @@ export default function Expenses() {
                     <td><Badge tone="gray">{e.category}</Badge></td>
                     <td>{e.description}</td>
                     <td className="cell-muted">{e.vendor || '—'}</td>
-                    <td className="num cell-strong">{kes(e.amount)}</td>
+                    <td className="text-right cell-strong">{kes(e.amount)}</td>
                     <td className="row-actions">
                       <button className="icon-btn" onClick={() => setEditing(e)} aria-label="Edit expense"><Pencil size={16} /></button>
                       <button className="icon-btn danger" onClick={() => remove(e)} aria-label="Delete expense"><Trash2 size={16} /></button>

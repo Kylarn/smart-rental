@@ -86,6 +86,7 @@ export default function PropertyDetail() {
         <div className="stat"><div className="stat-main"><span className="stat-label">Units</span><span className="stat-value">{p.stats.units}</span></div><span className="stat-icon"><DoorOpen size={20} /></span></div>
         <div className="stat stat-green"><div className="stat-main"><span className="stat-label">Occupied</span><span className="stat-value">{p.stats.occupied}</span></div><span className="stat-icon"><User size={20} /></span></div>
         <div className="stat stat-amber"><div className="stat-main"><span className="stat-label">Vacant</span><span className="stat-value">{p.stats.vacant}</span></div><span className="stat-icon"><DoorOpen size={20} /></span></div>
+        {p.stats.unknown ? <div className="stat"><div className="stat-main"><span className="stat-label">Unknown occupancy</span><span className="stat-value">{p.stats.unknown}</span></div><span className="stat-icon"><DoorOpen size={20} /></span></div> : null}
         <div className="stat"><div className="stat-main"><span className="stat-label">Occupancy</span><span className="stat-value">{p.stats.occupancyRate}%</span></div><span className="stat-icon"><Building2 size={20} /></span></div>
       </div>
 

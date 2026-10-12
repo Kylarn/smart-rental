@@ -1,9 +1,12 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 import { all, get, insert, run, tx } from '../db/index.js';
-import { asyncHandler, notFound, forbidden, badRequest, conflict, validate, normalizePhone } from '../utils/helpers.js';
+import { asyncHandler, notFound, forbidden, badRequest, conflict, validate, normalizePhone, formatDate } from '../utils/helpers.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { audit, notify } from '../services/notify.js';
+import { smsEvents } from '../services/sms/events.js';
+import { createActivationToken } from '../services/activation.js';
 import { leaseArrears, activeLeaseOfUnit, isCaretakerOfProperty, landlordPropertyIds, caretakerPropertyIds, placeholders } from '../services/rent.js';
 
 const router = express.Router();
@@ -67,7 +70,7 @@ router.get(
       const existing = grouped.get(r.id);
       if (!existing || (existing.lease_status !== 'active' && r.lease_status === 'active')) grouped.set(r.id, r);
     });
-    const tenants = [...grouped.values()].map((t) => {
+    const tenantList = [...grouped.values()].map((t) => {
       const leaseRow = get('SELECT * FROM leases WHERE id = ?', [t.lease_id]);
       const payments = all(
         `SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE tenant_id = ? AND status = 'completed'${
@@ -92,7 +95,30 @@ router.get(
         lease: serializeLeaseSummary({ ...leaseRow, property_name: t.property_name, unit_number: t.unit_number, unit_type: t.unit_type }),
       };
     });
-    res.json({ tenants });
+
+    const page = req.query.page ? Number(req.query.page) : null;
+    const limit = req.query.limit ? Number(req.query.limit) : null;
+    const hasPagination = Number.isInteger(page) && page > 0 && Number.isInteger(limit) && limit > 0;
+
+    if (!hasPagination) {
+      return res.json({ tenants: tenantList });
+    }
+
+    const total = tenantList.length;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const currentPage = Math.min(page, pages);
+    const offset = (currentPage - 1) * limit;
+    const paginated = tenantList.slice(offset, offset + limit);
+
+    res.json({
+      tenants: paginated,
+      pagination: {
+        page: currentPage,
+        limit,
+        total,
+        pages,
+      },
+    });
   })
 );
 
@@ -176,8 +202,10 @@ router.post(
     if (tenantUser && tenantUser.role !== 'tenant') throw conflict('This email belongs to a non-tenant account');
     if (tenantUser && tenantUser.status === 'suspended') throw conflict('This tenant account is suspended');
 
-    const password = req.body.password ? String(req.body.password) : `SR-${Math.random().toString(36).slice(2, 10)}`;
-    const passwordHash = tenantUser ? null : await bcrypt.hash(password, 10);
+    const explicitPassword = req.body.password ? String(req.body.password) : null;
+    const passwordHash = tenantUser
+      ? null
+      : await bcrypt.hash(explicitPassword || crypto.randomBytes(24).toString('hex'), 10);
     const rent = req.body.rent === undefined || req.body.rent === '' ? Number(unit.rent) : Number(req.body.rent);
     if (!Number.isFinite(rent) || rent <= 0) throw badRequest('Please enter a valid rent amount', { rent: 'Must be a positive number' });
     const deposit =
@@ -226,7 +254,7 @@ router.post(
       notify(tenantId, {
         type: 'lease',
         title: 'Lease created',
-        body: `Your lease for ${unit.property_name}, Unit ${unit.unit_number} runs from ${req.body.start_date} to ${req.body.end_date}.`,
+        body: `Your lease for ${unit.property_name}, Unit ${unit.unit_number} runs from ${formatDate(req.body.start_date)} to ${formatDate(req.body.end_date)}.`,
         link: '/tenant/lease',
         dedupeKey: `lease-${leaseId}`,
       });
@@ -242,7 +270,20 @@ router.post(
       link: '/landlord/tenants',
       dedupeKey: req.body.start_date ? `movein-${tenantId}-${req.body.start_date}` : `tenant-new-${tenantId}`,
     });
-    res.status(201).json({ ok: true, tenant_id: tenantId, lease_id: leaseId });
+
+    let activation = null;
+    if (!tenantUser && !explicitPassword) {
+      const issued = createActivationToken({ userId: tenantId, propertyId: unit.property_id, createdBy: req.user.id });
+      activation = { url: issued.url, expires_at: issued.expiresAt };
+      smsEvents.accountActivation({
+        userId: tenantId,
+        url: issued.url,
+        propertyName: unit.property_name,
+        dedupeKey: `sms-activation-${tenantId}-${Date.now()}`,
+      });
+      audit(req, 'tenant.activation_issued', 'tenant', tenantId, { expires_at: issued.expiresAt }, { property_id: unit.property_id });
+    }
+    res.status(201).json({ ok: true, tenant_id: tenantId, lease_id: leaseId, activation });
   })
 );
 
@@ -290,6 +331,51 @@ router.put(
       audit(req, 'tenant.updated', 'tenant', id, { fields: keys });
     }
     res.json({ ok: true });
+  })
+);
+
+router.post(
+  '/:id/activation',
+  requireRole('landlord', 'admin', 'caretaker'),
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const tenant = get('SELECT * FROM users WHERE id = ? AND role = ?', [id, 'tenant']);
+    if (!tenant) throw notFound('Tenant not found');
+    if (req.user.role === 'landlord') {
+      const owned = get(
+        'SELECT COUNT(*) AS c FROM leases l JOIN properties p ON p.id = l.property_id WHERE l.tenant_id = ? AND p.landlord_id = ?',
+        [id, req.user.id]
+      ).c;
+      if (!owned) throw notFound('Tenant not found');
+    }
+    if (req.user.role === 'caretaker') {
+      const assigned = get(
+        `SELECT COUNT(*) AS c FROM leases l
+         WHERE l.tenant_id = ? AND l.property_id IN (SELECT property_id FROM property_caretakers WHERE caretaker_id = ?)`,
+        [id, req.user.id]
+      ).c;
+      if (!assigned) throw notFound('Tenant not found');
+    }
+    if (tenant.status !== 'active') throw badRequest('This account is suspended and cannot be activated');
+
+    const lease = get(
+      `SELECT l.property_id, p.name AS property_name FROM leases l JOIN properties p ON p.id = l.property_id
+       WHERE l.tenant_id = ? ORDER BY l.created_at DESC LIMIT 1`,
+      [id]
+    );
+    const issued = createActivationToken({
+      userId: id,
+      propertyId: lease?.property_id || null,
+      createdBy: req.user.id,
+    });
+    smsEvents.accountActivation({
+      userId: id,
+      url: issued.url,
+      propertyName: lease?.property_name,
+      dedupeKey: `sms-activation-${id}-${Date.now()}`,
+    });
+    audit(req, 'tenant.activation_issued', 'tenant', id, { expires_at: issued.expiresAt }, { property_id: lease?.property_id || null });
+    res.status(201).json({ ok: true, activation: { url: issued.url, expires_at: issued.expiresAt } });
   })
 );
 

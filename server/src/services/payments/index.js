@@ -1,5 +1,6 @@
 import { get, insert, all, run } from '../../db/index.js';
 import { notify, auditLog } from '../notify.js';
+import { smsEvents } from '../sms/events.js';
 
 const providers = new Map();
 
@@ -38,16 +39,25 @@ export function completePayment(paymentId, extra = {}) {
 
   const updated = get('SELECT * FROM payments WHERE id = ?', [paymentId]);
   const tenant = get('SELECT id, full_name FROM users WHERE id = ?', [payment.tenant_id]);
-  const periodLabel = payment.period
+  const periodLabel = /^\d{4}-\d{2}$/.test(String(payment.period || ''))
     ? new Date(`${payment.period}-01T00:00:00`).toLocaleDateString('en-KE', { month: 'long', year: 'numeric' })
     : '';
 
   notify(payment.tenant_id, {
     type: 'success',
     title: 'Payment received',
-    body: `Your payment of KES ${Number(payment.amount).toLocaleString('en-KE')} for ${periodLabel} rent was received. Receipt ${receipt}.`,
+    body: `Your payment of KES ${Number(payment.amount).toLocaleString('en-KE')}${periodLabel ? ` for ${periodLabel} rent` : ''} was received. Receipt ${receipt}.`,
     link: '/tenant/payments',
     dedupeKey: `payment-${paymentId}`,
+  });
+
+  smsEvents.paymentReceived({
+    userId: payment.tenant_id,
+    paymentId,
+    propertyId: payment.property_id,
+    amount: payment.amount,
+    periodLabel,
+    receipt,
   });
 
   if (payment.property_id) {

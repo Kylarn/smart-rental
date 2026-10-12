@@ -197,6 +197,7 @@ export function landlordStats(landlordId) {
       units: 0,
       occupied: 0,
       vacant: 0,
+      unknown: 0,
       expectedRent: 0,
       collectedThisMonth: 0,
       outstanding: 0,
@@ -210,7 +211,8 @@ export function landlordStats(landlordId) {
   const unitRow = get(
     `SELECT COUNT(*) AS units,
             SUM(CASE WHEN status = 'occupied' THEN 1 ELSE 0 END) AS occupied,
-            SUM(CASE WHEN status = 'vacant' THEN 1 ELSE 0 END) AS vacant
+            SUM(CASE WHEN status = 'vacant' AND occupancy_known = 1 THEN 1 ELSE 0 END) AS vacant,
+            SUM(CASE WHEN COALESCE(occupancy_known, 1) = 0 THEN 1 ELSE 0 END) AS unknown
      FROM units WHERE property_id IN (${ph})`,
     ids
   );
@@ -238,16 +240,19 @@ export function landlordStats(landlordId) {
   );
   const units = Number(unitRow.units || 0);
   const occupied = Number(unitRow.occupied || 0);
+  const unknown = Number(unitRow.unknown || 0);
+  const known = units - unknown;
   return {
     properties: ids.length,
     units,
     occupied,
     vacant: Number(unitRow.vacant || 0),
+    unknown,
     expectedRent: Number(expected.total || 0),
     collectedThisMonth: Number(collected.total || 0),
     outstanding,
     pendingMaintenance: Number(pending.c || 0),
-    occupancyRate: units ? Math.round((occupied / units) * 100) : 0,
+    occupancyRate: known ? Math.round((occupied / known) * 100) : 0,
     expensesTotal: Number(expenses.total || 0),
     expensesMonth: Number(expenses.month || 0),
   };
@@ -283,7 +288,8 @@ export function propertyStats(propertyId) {
   const unitRow = get(
     `SELECT COUNT(*) AS units,
             SUM(CASE WHEN status = 'occupied' THEN 1 ELSE 0 END) AS occupied,
-            SUM(CASE WHEN status = 'vacant' THEN 1 ELSE 0 END) AS vacant
+            SUM(CASE WHEN status = 'vacant' AND occupancy_known = 1 THEN 1 ELSE 0 END) AS vacant,
+            SUM(CASE WHEN COALESCE(occupancy_known, 1) = 0 THEN 1 ELSE 0 END) AS unknown
      FROM units WHERE property_id = ?`,
     [propertyId]
   );
@@ -293,12 +299,15 @@ export function propertyStats(propertyId) {
   );
   const units = Number(unitRow.units || 0);
   const occupied = Number(unitRow.occupied || 0);
+  const unknown = Number(unitRow.unknown || 0);
+  const known = units - unknown;
   return {
     units,
     occupied,
     vacant: Number(unitRow.vacant || 0),
+    unknown,
     potentialRent: Number(rentRow.rent || 0),
-    occupancyRate: units ? Math.round((occupied / units) * 100) : 0,
+    occupancyRate: known ? Math.round((occupied / known) * 100) : 0,
   };
 }
 

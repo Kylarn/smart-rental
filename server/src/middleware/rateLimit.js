@@ -40,5 +40,6 @@ export function authRateLimits(config) {
     initiate: { windowMs: 5 * 60 * 1000, max: envMax('RATE_LIMIT_INITIATE_MAX', prod ? 8 : 5000), keyPrefix: 'initiate' },
     upload: { windowMs: 10 * 60 * 1000, max: envMax('RATE_LIMIT_UPLOAD_MAX', prod ? 60 : 5000), keyPrefix: 'upload' },
     callback: { windowMs: 5 * 60 * 1000, max: envMax('RATE_LIMIT_CALLBACK_MAX', 600), keyPrefix: 'callback' },
+    activation: { windowMs: 15 * 60 * 1000, max: envMax('RATE_LIMIT_ACTIVATION_MAX', prod ? 30 : 1000), keyPrefix: 'activation' },
   };
 }

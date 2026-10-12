@@ -7,9 +7,6 @@ import { Button, Field, Input } from '../components/ui.jsx';
 
 const DEMO = [
   { role: 'Admin', email: 'admin@smartrentals.co.ke', password: 'Admin@123' },
-  { role: 'Landlord', email: 'james@landlord.co.ke', password: 'Landlord@123' },
-  { role: 'Caretaker', email: 'caretaker@smartrentals.co.ke', password: 'Caretaker@123' },
-  { role: 'Tenant', email: 'peter.otieno@tenant.co.ke', password: 'Tenant@123' },
 ];
 
 export default function Login() {
@@ -109,17 +106,19 @@ export default function Login() {
             Don&apos;t have an account? <Link to="/register">Create one</Link>
           </p>
 
-          <div className="demo-box">
-            <strong>Demo accounts</strong> (click to fill)
-            {DEMO.map((d) => (
-              <div className="demo-row" key={d.email}>
-                <span>{d.role}</span>
-                <button type="button" onClick={() => setForm({ email: d.email, password: d.password })}>
-                  {d.email}
-                </button>
-              </div>
-            ))}
-          </div>
+          {import.meta.env.DEV ? (
+            <div className="demo-box">
+              <strong>Demo accounts</strong> (click to fill)
+              {DEMO.map((d) => (
+                <div className="demo-row" key={d.email}>
+                  <span>{d.role}</span>
+                  <button type="button" onClick={() => setForm({ email: d.email, password: d.password })}>
+                    {d.email}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
       </main>
     </div>

@@ -308,7 +308,7 @@ function ReceiptModal({ receipt, onClose }) {
         <div className="kv"><span>Paid on</span><span>{date(receipt.paid_at)}</span></div>
         <div className="divider" />
         <div className="kv receipt-total"><span>Amount paid</span><span>{kes(receipt.amount)}</span></div>
-        {receipt.landlord ? <p className="muted small mt-8">Landlord: {receipt.landlord.full_name} · {receipt.landlord.phone || ''}</p> : null}
+        {receipt.landlord ? <p className="muted small mt-8">Landlord: {receipt.landlord.full_name}{receipt.landlord.phone ? ` · ${receipt.landlord.phone}` : ''}</p> : null}
       </div>
       <div className="modal-foot" style={{ padding: 0, border: 'none', marginTop: 12 }}>
         <Button variant="secondary" onClick={onClose}>Close</Button>

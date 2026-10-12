@@ -8,8 +8,8 @@ Accounts are just logins. What makes a tenant "yours" is a **lease** row linking
 
 Two paths to create that link:
 
-1. **Tenant self-serves:** tenant registers (public `POST /api/auth/register`, role `tenant`) → browses active listings (`GET /api/market/properties`) → applies (`POST /api/market/properties/:id/apply`) → landlord/caretaker approves and assigns a unit → lease created.
-2. **Landlord/caretaker adds:** they create a lease directly for a user (or accept a walk-in application where the applicant has no account — the system creates the tenant user and the staff set a temporary password).
+1. **Tenant self-serves:** anyone (no account needed) can apply to a listed property (`POST /api/market/properties/:id/apply`) and gets a reference like `APP-000123`; they can poll `GET /api/market/applications/status?reference=&email=`. Logged-in tenants can also register (`POST /api/auth/register`, role `tenant`) → browse listings → apply → landlord/caretaker approves and assigns a unit → lease created.
+2. **Landlord/caretaker adds:** they create a lease directly for a user. For a brand-new applicant with no password, the system creates the tenant user and issues a **single-use activation link** (see below) — never a temporary password.
 
 ## Role flows
 
@@ -22,6 +22,8 @@ Two paths to create that link:
 - View utility bills issued for their unit (`GET /api/utility-bills` — returns only their own) at `/app/my-bills`; settle by paying the landlord/caretaker, who records it.
 - Raise maintenance requests and track their status.
 - Message the landlord; receive announcements and notifications.
+- **Activate a landlord-created account:** open the SMS link at `/activate?token=…` (`GET/POST /api/auth/activation`, resend at `POST /api/auth/activation/resend`), set a password, and sign in.
+- **Manage SMS preferences:** opt out/in of automated texts from Profile (`POST /api/sms/opt-out`).
 - Move-out keeps their payment/tenancy history.
 
 ### Landlord
@@ -37,14 +39,32 @@ Two paths to create that link:
 ### Caretaker
 
 - Everything is scoped to the properties they are assigned to.
-- Record rent, add/manage tenants & units, handle maintenance requests, log expenses (notifies the landlord), post announcements, and **accept rental applications → assign units → create leases** for applicants (setting a temporary password for applicants without an account).
+- Record rent, add/manage tenants & units, handle maintenance requests, log expenses (notifies the landlord), post announcements, and **accept rental applications → assign units → create leases** for applicants (issuing a single-use activation link for applicants without an account).
 - Issue utility bills and record their settlement for assigned properties (same `utility-bills` routes, scoped by `isCaretakerOfProperty`).
 - Removing the assignment (`DELETE .../caretakers/:caretakerId`) instantly revokes access.
 
 ### Admin
 
 - Admin-only routes (`GET/POST /api/admin/...`): manage users of any role, platform settings, audit log, platform statistics and global reports.
+- **SMS settings:** toggle `sms_enabled` / pick `sms_provider` in `PUT /api/admin/settings`; inspect the delivery log (`GET /api/sms`), list gateways (`GET /api/sms/providers`) and drain the queue (`POST /api/sms/flush`).
 - Also the only path to create admin accounts.
+
+## SMS notifications
+
+Automated texts are queued asynchronously (never blocking the request) whenever a relevant event happens:
+
+- **Rent due / overdue** — the scheduled reminder passes (`scheduler.js`).
+- **Payment receipt** — only once a payment is `completed` (M-Pesa or recorded).
+- **Utility bill issued / settled** — when a bill is created or marked paid.
+- **Announcement** — per tenant in the targeted scope.
+- **Maintenance update** — when a request changes status.
+- **Account activation** — the tenant's single-use link.
+
+Each message is deduped (so retries don't double-send), stored in `sms_messages` with state `queued → sent → delivered` (or `failed`, retried up to `SMS_MAX_ATTEMPTS`), and scoped by role: admins see all, landlords see their portfolio, caretakers their assigned properties, tenants their own. The active gateway is chosen by `SMS_PROVIDER` (or the admin setting); the default `mock` provider logs the text and marks it **simulated** — no real SMS is sent. A gateway can post delivery receipts to `POST /api/sms/webhook`.
+
+## Tenant account activation
+
+When staff add a tenant without a password, the server mints a token (`account_activations`), stores only its hash-checkable form, and sends a link `…/activate?token=…` by SMS. The link is single-use and expires after `ACTIVATION_TTL_HOURS` (default 48); consuming it sets the password hash, marks the account active, notifies and audits. Resends are non-enumerating (the response is identical whether or not the email exists). Permanent passwords are never sent by SMS.
 
 ## Security & isolation rules enforced per route
 
@@ -55,3 +75,5 @@ Two paths to create that link:
 - Utility bills: staff are scoped to their properties; the `tenant_id` is always derived from the unit's active lease (`activeLeaseOfUnit`), never from the request body; a unit can have at most one bill per period + category; paid bills cannot be edited or deleted.
 - Receipts exist only for completed payments and only for the owner; M-Pesa callbacks are idempotent; failed/amount-mismatched callbacks cannot complete a payment.
 - Uploads require auth, validate real content types, and store files under unguessable names.
+- Public applications require no login, are rate-limited, reject duplicates for the same property + contact details, and expose only public listing data; a unit's availability is rechecked on submit and again on approval.
+- SMS history is role-scoped (`/api/sms`), opt-out is respected at send time, and mock deliveries are always flagged `simulated`. Activation tokens are single-use, expiring, and never reveal whether an account exists.

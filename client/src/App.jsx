@@ -6,6 +6,7 @@ import Layout from './components/Layout.jsx';
 
 const Login = lazy(() => import('./pages/Login.jsx'));
 const Register = lazy(() => import('./pages/Register.jsx'));
+const Activate = lazy(() => import('./pages/Activate.jsx'));
 const Home = lazy(() => import('./pages/Home.jsx'));
 const MarketProperty = lazy(() => import('./pages/MarketProperty.jsx'));
 
@@ -27,6 +28,8 @@ const Messages = lazy(() => import('./pages/Messages.jsx'));
 const Announcements = lazy(() => import('./pages/Announcements.jsx'));
 const Notifications = lazy(() => import('./pages/Notifications.jsx'));
 const Reports = lazy(() => import('./pages/Reports.jsx'));
+const RentRegister = lazy(() => import('./pages/RentRegister.jsx'));
+const SmsLog = lazy(() => import('./pages/SmsLog.jsx'));
 const Profile = lazy(() => import('./pages/Profile.jsx'));
 const MyLease = lazy(() => import('./pages/MyLease.jsx'));
 const AdminUsers = lazy(() => import('./pages/AdminUsers.jsx'));
@@ -57,6 +60,7 @@ export default function App() {
         <Route path="/property/:id" element={<MarketProperty />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/activate" element={<Activate />} />
 
         <Route
           path="/app"
@@ -85,6 +89,8 @@ export default function App() {
           <Route path="announcements" element={<Announcements />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="reports" element={<Reports />} />
+          <Route path="register" element={<RentRegister />} />
+          <Route path="sms" element={<SmsLog />} />
           <Route path="profile" element={<Profile />} />
           <Route path="admin/users" element={<AdminUsers />} />
           <Route path="admin/audit" element={<AdminAudit />} />

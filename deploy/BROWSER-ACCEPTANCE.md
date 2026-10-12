@@ -13,7 +13,7 @@ ignored only if not part of the app) is a **fail**.
 ## 0. Setup
 - [ ] Open the staging URL over **HTTPS** in a **private window** (no cached login).
 - [ ] Open DevTools (F12): Console → "Preserve log". Network tab open.
-- [ ] Start at the public landing page (no login). Listed as "Marketplace".
+- [ ] Start at the public landing page (no login).
 
 ## 1. Public surface
 - [ ] Marketplace loads: property cards, search/filter, no layout overflow at desktop **and** mobile widths.
@@ -21,8 +21,8 @@ ignored only if not part of the app) is a **fail**.
 - [ ] Mobile: navigation/header collapses to a hamburger with no horizontal scroll.
 
 ## 2. Authentication
-- [ ] Login (`/login`): wrong password shows an error toast; 5+ rapid attempts should produce a `429` (rate limit) — verify no console exception.
-- [ ] Login with tenant `peter.otieno@tenant.co.ke / Tenant@123` → lands on `/app`.
+- [ ] Login (`/login`): wrong password shows an error toast. On a production build, more than 20 failed attempts from one IP within 15 minutes returns `429` (staging/dev uses a higher limit unless `RATE_LIMIT_LOGIN_MAX` is set) — verify no console exception.
+- [ ] Login with admin `admin@smartrentals.co.ke / Admin@123` → lands on `/app`.
 - [ ] Refresh at `/app/payments` → page reloads, still logged in (SPA fallback works).
 - [ ] Logout → redirected to `/login`; going back does **not** restore the logged-in view; reloading `/app` redirects to `/login`.
 - [ ] Verified `Set-Cookie` flags over HTTPS: `HttpOnly`, `Secure`, `SameSite=Lax` (Application → Cookies).
@@ -31,13 +31,14 @@ ignored only if not part of the app) is a **fail**.
 | Role | Account |
 | --- | --- |
 | Admin | `admin@smartrentals.co.ke / Admin@123` |
-| Landlord | `james@landlord.co.ke / Landlord@123` |
-| Caretaker | `caretaker@smartrentals.co.ke / Caretaker@123` |
-| Tenant | `peter.otieno@tenant.co.ke / Tenant@123` |
 
-For each:
+> The Riesta seed creates **only** the admin plus a suspended placeholder owner. There are no
+> demo landlord/caretaker/tenant logins. To exercise the other roles, register a landlord and
+> build a property → unit → tenant/caretaker fixture through the UI (or reuse the smoke-test setup).
+
+For each role:
 - [ ] Sidebar/tab navigation highlights the active page on every main area.
-- [ ] Tenant sees only: Dashboard, My Lease, Payments, Maintenance, Move-Out, Messages, Announcements, Notifications — **not** Properties/Units/Tenants/Reports.
+- [ ] Tenant sees only: Dashboard, My Lease, Rent & Payments, My Bills, Maintenance, Applications, Messages, Announcements, SMS Log — **not** Properties/Units/Tenants/Reports.
 - [ ] Caretaker sees only pages for their assigned properties; navigating to `/app/reports` shows caretaker reports, **not** landlord-wide data.
 - [ ] Landlord sees full property management + reports; **no** admin pages.
 - [ ] Admin additionally sees Users / Audit / Settings.

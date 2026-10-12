@@ -118,7 +118,7 @@ try {
   const login = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'james@landlord.co.ke', password: 'Landlord@123' }),
+    body: JSON.stringify({ email: 'admin@smartrentals.co.ke', password: 'Admin@123' }),
   });
   step('a seeded account can authenticate against the restored database', () => {
     assert.equal(login.status, 200, `login returned ${login.status}`);

@@ -106,7 +106,7 @@ export default function UtilityBills() {
           <div className="table-wrap">
             <table className="data">
               <thead>
-                <tr><th>Period</th><th>Property</th><th>Unit</th><th>Tenant</th><th>Category</th><th className="num">Amount</th><th>Status</th><th></th></tr>
+                <tr><th>Period</th><th>Property</th><th>Unit</th><th>Tenant</th><th>Category</th><th className="text-right">Amount</th><th>Status</th><th></th></tr>
               </thead>
               <tbody>
                 {bills.map((b) => (
@@ -116,7 +116,7 @@ export default function UtilityBills() {
                     <td>{b.unit_number}</td>
                     <td>{b.tenant_name}</td>
                     <td><Badge tone="gray">{b.category}</Badge></td>
-                    <td className="num cell-strong">{kes(b.amount)}</td>
+                    <td className="text-right cell-strong">{kes(b.amount)}</td>
                     <td><StatusBadge status={b.status} label={b.status === 'paid' ? 'Paid' : 'Unpaid'} /></td>
                     <td className="row-actions">
                       {b.status === 'unpaid' ? (

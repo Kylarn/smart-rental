@@ -55,6 +55,7 @@ router.get(
     if (status) {
       where.push('u.status = ?');
       params.push(status);
+      if (status === 'vacant') where.push('COALESCE(u.occupancy_known, 1) = 1');
     }
     if (type) {
       where.push('u.unit_type = ?');

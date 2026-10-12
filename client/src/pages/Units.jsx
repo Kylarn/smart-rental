@@ -73,7 +73,7 @@ export default function Units() {
                     <td><Link className="link" to={`/app/properties/${u.property_id}`}>{u.property_name}</Link></td>
                     <td className="cell-muted">{u.unit_type}</td>
                     <td className="cell-strong">{kes(u.rent)}</td>
-                    <td><StatusBadge status={u.status} /></td>
+                    <td>{u.occupancy_known === 0 ? <span className="badge badge-gray">Occupancy unknown</span> : <StatusBadge status={u.status} />}</td>
                     <td>{u.tenant ? <Link className="link" to={`/app/tenants/${u.tenant.id}`}>{u.tenant.full_name}</Link> : <span className="faint">—</span>}</td>
                     <td>{u.arrears?.total > 0 ? <span style={{ color: 'var(--red)', fontWeight: 600 }}>{kes(u.arrears.total)}</span> : <span className="faint">—</span>}</td>
                   </tr>

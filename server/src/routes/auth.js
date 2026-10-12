@@ -3,14 +3,14 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
 import { get, insert, run } from '../db/index.js';
-import { asyncHandler, validate, badRequest, conflict, unauthorized, normalizePhone } from '../utils/helpers.js';
+import { asyncHandler, validate, badRequest, conflict, unauthorized, forbidden, normalizePhone } from '../utils/helpers.js';
 import { requireAuth, signToken, setAuthCookie, clearAuthCookie, COOKIE_NAME } from '../middleware/auth.js';
 import { audit } from '../services/notify.js';
 
 const router = express.Router();
 
 const PUBLIC_USER_COLUMNS =
-  'id, role, full_name, email, phone, status, avatar_url, county, id_number, bio, created_at';
+  'id, role, full_name, email, phone, status, avatar_url, county, id_number, bio, sms_opt_out, created_at';
 
 function publicUser(user) {
   if (!user) return null;
@@ -56,7 +56,7 @@ router.post(
       throw unauthorized('Invalid email or password');
     }
     if (user.status === 'suspended') {
-      throw badRequest('This account has been suspended. Please contact support.');
+      throw forbidden('This account has been suspended. Contact support for assistance.');
     }
     setAuthCookie(res, signToken(user));
     audit(req, 'auth.login', 'user', user.id);

@@ -21,6 +21,16 @@ export const config = {
   clientDist: path.resolve(__dirname, '..', '..', 'client', 'dist'),
   cookieSecure: process.env.COOKIE_SECURE === '1',
   maxUploadBytes: 6 * 1024 * 1024,
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',')[0].trim(),
+  activationTtlHours: Number(process.env.ACTIVATION_TTL_HOURS || 48),
+  sms: {
+    provider: process.env.SMS_PROVIDER || 'mock',
+    senderId: process.env.SMS_SENDER_ID || 'SMARTRENT',
+    apiUrl: process.env.SMS_API_URL || '',
+    apiKey: process.env.SMS_API_KEY || '',
+    enabled: process.env.SMS_ENABLED !== '0',
+    maxAttempts: Number(process.env.SMS_MAX_ATTEMPTS || 3),
+  },
 };
 
 const { errors, warnings } = validateEnvConfig(config.env, { jwtSecret: config.jwtSecret });

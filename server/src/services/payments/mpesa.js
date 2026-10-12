@@ -67,7 +67,7 @@ async function realStkPush({ phone, amount, reference, accountRef }) {
 
 function mockStkPush({ phone, amount }) {
   const checkoutRequestId = `MOCK-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
-  const customerMessage = `Simulated STK push sent to ${phone}. Enter any M-Pesa PIN to approve (demo mode).`;
+  const customerMessage = `Simulated STK push sent to ${phone}. Enter any M-Pesa PIN to approve (mock mode).`;
   setTimeout(() => {
     try {
       const pending = get('SELECT id FROM payments WHERE provider_ref = ? AND status IN (?, ?)', [
@@ -77,7 +77,7 @@ function mockStkPush({ phone, amount }) {
       ]);
       if (!pending) return;
       const failChance = String(amount).endsWith('13');
-      if (failChance) failPayment(pending.id, 'The M-Pesa request was cancelled by the user');
+      if (failChance) failPayment(pending.id, 'Simulated M-Pesa failure (mock provider)');
       else completePayment(pending.id);
     } catch (err) {
       console.error('[mpesa:mock] completion error', err);

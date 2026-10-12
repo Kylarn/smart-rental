@@ -104,6 +104,7 @@ async function landlordDashboard(landlordId) {
         `SELECT p.id, p.name,
                 (SELECT COUNT(*) FROM units WHERE property_id = p.id) AS units,
                 (SELECT COUNT(*) FROM units WHERE property_id = p.id AND status = 'occupied') AS occupied,
+                (SELECT COUNT(*) FROM units WHERE property_id = p.id AND COALESCE(occupancy_known,1) = 0) AS unknown,
                 (SELECT COALESCE(SUM(rent),0) FROM units WHERE property_id = p.id AND status = 'occupied') AS monthly_rent,
                 (SELECT COALESCE(SUM(amount),0) FROM payments WHERE property_id = p.id AND status = 'completed'
                    AND paid_at >= strftime('%Y-%m-01')) AS collected_month,
@@ -179,6 +180,7 @@ async function caretakerDashboard(caretakerId) {
         `SELECT p.id, p.name,
                 (SELECT COUNT(*) FROM units WHERE property_id = p.id) AS units,
                 (SELECT COUNT(*) FROM units WHERE property_id = p.id AND status = 'occupied') AS occupied,
+                (SELECT COUNT(*) FROM units WHERE property_id = p.id AND COALESCE(occupancy_known,1) = 0) AS unknown,
                 (SELECT COALESCE(SUM(rent),0) FROM units WHERE property_id = p.id AND status = 'occupied') AS monthly_rent,
                 (SELECT COALESCE(SUM(amount),0) FROM payments WHERE property_id = p.id AND status = 'completed'
                    AND paid_at >= strftime('%Y-%m-01')) AS collected_month,
@@ -380,7 +382,11 @@ async function adminDashboard() {
   );
   const properties = get(`SELECT COUNT(*) AS total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active FROM properties`);
   const units = get(
-    `SELECT COUNT(*) AS total, SUM(CASE WHEN status='occupied' THEN 1 ELSE 0 END) AS occupied, SUM(CASE WHEN status='vacant' THEN 1 ELSE 0 END) AS vacant FROM units`
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN status='occupied' THEN 1 ELSE 0 END) AS occupied,
+            SUM(CASE WHEN status='vacant' AND occupancy_known=1 THEN 1 ELSE 0 END) AS vacant,
+            SUM(CASE WHEN COALESCE(occupancy_known,1)=0 THEN 1 ELSE 0 END) AS unknown
+     FROM units`
   );
   const payments = get(
     `SELECT COUNT(*) AS total,
@@ -423,6 +429,7 @@ async function adminDashboard() {
       units: Number(units.total || 0),
       occupied: Number(units.occupied || 0),
       vacant: Number(units.vacant || 0),
+      unknownUnits: Number(units.unknown || 0),
       collected: Number(payments.collected || 0),
       pendingPayments: Number(payments.pending || 0),
       paymentCount: Number(payments.total || 0),

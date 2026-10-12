@@ -14,7 +14,11 @@ function scopeIds(req) {
 }
 
 function assertInScope(id, ids) {
-  if (!ids.includes(id)) throw badRequest('Property is outside your access');
+  if (!ids.includes(id)) throw badRequest('You do not have access to this property');
+}
+
+function knownUnits(row) {
+  return Number(row.total || 0) - Number(row.unknown || 0);
 }
 
 router.get(
@@ -110,8 +114,10 @@ function caretakerScopeStats(ids) {
   const params = ids.length ? ids : [-1];
   const props = get(`SELECT COUNT(*) AS c FROM properties WHERE id IN (${ph})`, params).c;
   const units = get(
-    `SELECT COUNT(*) AS total, SUM(CASE WHEN status='occupied' THEN 1 ELSE 0 END) AS occupied,
-            SUM(CASE WHEN status='vacant' THEN 1 ELSE 0 END) AS vacant
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN status='occupied' THEN 1 ELSE 0 END) AS occupied,
+            SUM(CASE WHEN status='vacant' AND occupancy_known=1 THEN 1 ELSE 0 END) AS vacant,
+            SUM(CASE WHEN COALESCE(occupancy_known,1)=0 THEN 1 ELSE 0 END) AS unknown
      FROM units WHERE property_id IN (${ph})`,
     params
   );
@@ -138,13 +144,15 @@ function caretakerScopeStats(ids) {
      FROM expenses WHERE property_id IN (${ph})`,
     params
   );
+  const known = knownUnits(units);
   return {
     properties: Number(props),
     units: Number(units.total),
     occupied: Number(units.occupied),
     vacant: Number(units.vacant || 0),
-    occupancyRate: units.total ? Math.round((units.occupied / units.total) * 100) : 0,
-    vacancyRate: units.total ? Math.round(((units.total - units.occupied) / units.total) * 100) : 0,
+    unknown: Number(units.unknown || 0),
+    occupancyRate: known ? Math.round((units.occupied / known) * 100) : 0,
+    vacancyRate: known ? Math.round(((known - units.occupied) / known) * 100) : 0,
     expectedRent: Number(expected),
     outstanding: arrearsTotal,
     pendingMaintenance: Number(maintenanceOpen),
@@ -160,18 +168,25 @@ function platformStats() {
             COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0) AS completed
      FROM payments`
   );
-  const units = get(`SELECT COUNT(*) AS total, SUM(CASE WHEN status='occupied' THEN 1 ELSE 0 END) AS occupied FROM units`);
+  const units = get(
+    `SELECT COUNT(*) AS total,
+            SUM(CASE WHEN status='occupied' THEN 1 ELSE 0 END) AS occupied,
+            SUM(CASE WHEN COALESCE(occupancy_known,1)=0 THEN 1 ELSE 0 END) AS unknown
+     FROM units`
+  );
+  const known = knownUnits(units);
   return {
     properties: get('SELECT COUNT(*) AS c FROM properties').c,
     units: Number(units.total),
     occupied: Number(units.occupied),
-    vacancyRate: units.total ? Math.round(((units.total - units.occupied) / units.total) * 100) : 0,
+    unknown: Number(units.unknown || 0),
+    vacancyRate: known ? Math.round(((known - units.occupied) / known) * 100) : 0,
     expectedRent: get(`SELECT COALESCE(SUM(rent),0) AS c FROM leases WHERE status = 'active'`).c,
     collectedThisMonth: get(
       `SELECT COALESCE(SUM(amount),0) AS c FROM payments WHERE status='completed' AND paid_at >= strftime('%Y-%m-01')`
     ).c,
     collected: Number(payments.collected),
-    occupancyRate: units.total ? Math.round((units.occupied / units.total) * 100) : 0,
+    occupancyRate: known ? Math.round((units.occupied / known) * 100) : 0,
     outstanding: 0,
     pendingMaintenance: get(`SELECT COUNT(*) AS c FROM maintenance_requests WHERE status NOT IN ('completed','closed')`).c,
     expensesTotal: get(`SELECT COALESCE(SUM(amount),0) AS c FROM expenses`).c,

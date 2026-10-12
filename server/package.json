@@ -9,6 +9,10 @@
     "start": "node src/index.js",
     "seed": "node src/db/seed.js",
     "bootstrap": "node src/db/bootstrap.js",
+    "import:riesta": "node scripts/import-riesta.mjs",
+    "activate:tenants": "node scripts/activate-register-tenants.mjs",
+    "activate:landlord": "node scripts/activate-landlord.mjs",
+    "activate:caretaker": "node scripts/activate-caretaker.mjs",
     "test:api": "node tests/api.test.js",
     "test:smoke": "node tests/smoke.mjs",
     "test:backup": "node tests/backup.restore.mjs"

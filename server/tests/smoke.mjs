@@ -103,6 +103,81 @@ async function stopServer(child) {
   });
 }
 
+// The production seed now holds the real Riesta register (no demo landlords/tenants).
+// Build a disposable landlord -> property -> unit -> tenant/caretaker fixture through
+// the public API so the role-scoping checks still exercise real workflows.
+async function buildFixture() {
+  const stamp = Date.now();
+  const fx = {
+    landlordEmail: `fx.landlord.${stamp}@test.ke`,
+    landlordPass: 'Fixture123',
+    caretakerEmail: `fx.caretaker.${stamp}@test.ke`,
+    caretakerPass: 'Fixture123',
+    tenantEmail: `fx.tenant.${stamp}@test.ke`,
+    tenantPass: 'Fixture123',
+    tenantId: null,
+  };
+
+  const l = session();
+  let res = await l.request('POST', '/api/auth/register', {
+    role: 'landlord',
+    full_name: 'Fixture Landlord',
+    email: fx.landlordEmail,
+    phone: '0722000001',
+    password: fx.landlordPass,
+  });
+  assert.equal(res.status, 201, `fixture landlord register returned ${res.status}`);
+  await l.login(fx.landlordEmail, fx.landlordPass);
+
+  res = await l.request('POST', '/api/properties', {
+    name: `Fixture Property ${stamp}`,
+    county: 'Nairobi',
+    property_type: 'Apartment',
+  });
+  assert.equal(res.status, 201, `fixture property create returned ${res.status}`);
+  const propertyId = (await res.json()).property.id;
+
+  res = await l.request('POST', '/api/units', {
+    property_id: propertyId,
+    unit_number: 'A1',
+    unit_type: '1 Bedroom',
+    rent: 20000,
+  });
+  assert.equal(res.status, 201, `fixture unit create returned ${res.status}`);
+  const unitId = (await res.json()).unit.id;
+
+  res = await l.request('POST', '/api/tenants', {
+    full_name: 'Fixture Tenant',
+    email: fx.tenantEmail,
+    phone: '0722000002',
+    unit_id: unitId,
+    start_date: '2026-01-01',
+    end_date: '2027-01-01',
+    rent: 20000,
+    password: fx.tenantPass,
+  });
+  assert.equal(res.status, 201, `fixture tenant create returned ${res.status}`);
+  fx.tenantId = (await res.json()).tenant_id;
+
+  res = await l.request('POST', `/api/properties/${propertyId}/caretakers`, {
+    full_name: 'Fixture Caretaker',
+    email: fx.caretakerEmail,
+    phone: '0722000003',
+    password: fx.caretakerPass,
+  });
+  assert.equal(res.status, 201, `fixture caretaker assign returned ${res.status}`);
+
+  res = await l.request('POST', '/api/payments/record', {
+    tenant_id: fx.tenantId,
+    amount: 20000,
+    method: 'cash',
+    period: '2026-01',
+  });
+  assert.equal(res.status, 201, `fixture payment record returned ${res.status}`);
+
+  return fx;
+}
+
 console.log('Smart Rentals staging smoke test\n');
 
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -119,6 +194,7 @@ if (seeded.status !== 0) {
 let server = startServer();
 try {
   await waitHealth();
+  const fx = await buildFixture();
 
   await check('health endpoint is public and reports ok', async () => {
     const res = await fetch(`${base}/api/health`);
@@ -204,7 +280,7 @@ try {
     const res = await fetch(`${base}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'james@landlord.co.ke', password: 'Landlord@123' }),
+      body: JSON.stringify({ email: 'admin@smartrentals.co.ke', password: 'Admin@123' }),
     });
     const sc = res.headers.get('set-cookie') || '';
     assert.ok(sc.includes('HttpOnly'), 'HttpOnly flag present');
@@ -222,7 +298,7 @@ try {
 
   await check('landlord can list own properties', async () => {
     const s = session();
-    await s.login('james@landlord.co.ke', 'Landlord@123');
+    await s.login(fx.landlordEmail, fx.landlordPass);
     const res = await s.request('GET', '/api/properties');
     assert.equal(res.status, 200);
     assert.ok((await res.json()).properties.length >= 1);
@@ -230,7 +306,7 @@ try {
 
   await check('caretaker dashboard is scoped and returns byProperty', async () => {
     const s = session();
-    await s.login('caretaker@smartrentals.co.ke', 'Caretaker@123');
+    await s.login(fx.caretakerEmail, fx.caretakerPass);
     const res = await s.request('GET', '/api/dashboard');
     assert.equal(res.status, 200);
     const body = await res.json();
@@ -240,17 +316,19 @@ try {
 
   await check('tenant sees only own payments', async () => {
     const s = session();
-    await s.login('peter.otieno@tenant.co.ke', 'Tenant@123');
+    await s.login(fx.tenantEmail, fx.tenantPass);
     const me = await s.request('GET', '/api/auth/me');
     const uid = (await me.json()).user.id;
+    assert.equal(uid, fx.tenantId, 'fixture tenant id matches');
     const res = await s.request('GET', '/api/payments');
     const body = await res.json();
+    assert.ok(body.payments.length >= 1, 'fixture tenant has at least one payment');
     assert.ok(body.payments.every((p) => p.tenant_id === uid), 'no other tenants payments leaked');
   });
 
   await check('tenant is forbidden from landlord reports (403)', async () => {
     const s = session();
-    await s.login('peter.otieno@tenant.co.ke', 'Tenant@123');
+    await s.login(fx.tenantEmail, fx.tenantPass);
     const res = await s.request('GET', '/api/reports/overview');
     assert.equal(res.status, 403);
   });
@@ -264,7 +342,7 @@ try {
 
   await check('no unexpected 500 responses across workflows', async () => {
     const s = session();
-    await s.login('caretaker@smartrentals.co.ke', 'Caretaker@123');
+    await s.login(fx.caretakerEmail, fx.caretakerPass);
     for (const url of ['/api/dashboard', '/api/properties', '/api/tenants', '/api/maintenance', '/api/reports/overview', '/api/reports/caretakers']) {
       const res = await s.request('GET', url);
       assert.notEqual(res.status, 500, `${url} returned 500`);

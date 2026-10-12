@@ -21,6 +21,8 @@ export default function Profile() {
   const [pw, setPw] = useState({ current_password: '', new_password: '', confirm: '' });
   const [pwSaving, setPwSaving] = useState(false);
   const [pwErrors, setPwErrors] = useState({});
+  const [smsOptOut, setSmsOptOut] = useState(Boolean(user?.sms_opt_out));
+  const [smsSaving, setSmsSaving] = useState(false);
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
   const setP = (k) => (e) => setPw({ ...pw, [k]: e.target.value });
@@ -61,6 +63,21 @@ export default function Profile() {
     }
   };
 
+  const toggleSms = async () => {
+    const next = !smsOptOut;
+    setSmsSaving(true);
+    try {
+      await api.post('/api/sms/opt-out', { opt_out: next });
+      setSmsOptOut(next);
+      setUser({ ...user, sms_opt_out: next ? 1 : 0 });
+      toast.success(next ? 'SMS notifications turned off' : 'SMS notifications turned on');
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSmsSaving(false);
+    }
+  };
+
   return (
     <>
       <div className="page-head">
@@ -69,7 +86,6 @@ export default function Profile() {
           <p>Manage your personal details and account security.</p>
         </div>
       </div>
-
       <div className="grid grid-2">
         <Card title="Personal details">
           <div className="avatar-row mb-16">
@@ -100,6 +116,24 @@ export default function Profile() {
           </form>
         </Card>
       </div>
+
+      <Card title="Text message notifications" className="mt-16">
+        <p className="muted small mb-16">
+          Control whether Smart Rentals sends automated SMS to {user?.phone || 'your phone'} — such as rent
+          reminders, payment receipts and utility bill notices.
+        </p>
+        <div className="flex-between wrap">
+          <div>
+            <strong>{smsOptOut ? 'SMS notifications are off' : 'SMS notifications are on'}</strong>
+            <div className="cell-muted">
+              {smsOptOut ? 'You will not receive automated text messages.' : 'You will receive automated text messages.'}
+            </div>
+          </div>
+          <Button variant={smsOptOut ? 'primary' : 'secondary'} onClick={toggleSms} loading={smsSaving}>
+            {smsOptOut ? 'Turn on SMS' : 'Turn off SMS'}
+          </Button>
+        </div>
+      </Card>
     </>
   );
 }

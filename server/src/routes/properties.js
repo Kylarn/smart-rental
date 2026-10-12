@@ -112,15 +112,145 @@ router.get(
        WHERE pc.property_id = ? ORDER BY u.full_name`,
       [property.id]
     );
+    const unitRows = units.map((u) => ({
+      ...u,
+      amenities: parseJson(u.amenities, []),
+      tenant: u.status === 'occupied' ? tenantOfUnit(u.id) : null,
+    }));
+
+    const page = req.query.page ? Number(req.query.page) : null;
+    const limit = req.query.limit ? Number(req.query.limit) : null;
+    const hasPagination = Number.isInteger(page) && page > 0 && Number.isInteger(limit) && limit > 0;
+
+    if (!hasPagination) {
+      return res.json({
+        property: serializeProperty(property),
+        units: unitRows,
+        landlord,
+        caretakers,
+      });
+    }
+
+    const total = unitRows.length;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const currentPage = Math.min(page, pages);
+    const offset = (currentPage - 1) * limit;
+    const paginated = unitRows.slice(offset, offset + limit);
+
     res.json({
       property: serializeProperty(property),
-      units: units.map((u) => ({
-        ...u,
-        amenities: parseJson(u.amenities, []),
-        tenant: u.status === 'occupied' ? tenantOfUnit(u.id) : null,
-      })),
+      units: paginated,
       landlord,
       caretakers,
+      pagination: {
+        page: currentPage,
+        limit,
+        total,
+        pages,
+      },
+    });
+  })
+);
+
+router.get(
+  '/:id/register',
+  asyncHandler(async (req, res) => {
+    const property = assertPropertyAccess(Number(req.params.id), req.user);
+    const register = all(
+      `SELECT r.*, u.unit_number, u.floor FROM rental_register r
+       LEFT JOIN units u ON u.id = r.unit_id
+       WHERE r.property_id = ?
+       ORDER BY CAST(COALESCE(u.unit_number, r.room_label) AS INTEGER), r.room_label`,
+      [property.id]
+    );
+    const rent = all(
+      `SELECT e.*, r.room_label, u.unit_number FROM rent_register_entries e
+       LEFT JOIN rental_register r ON r.id = e.rental_register_id
+       LEFT JOIN units u ON u.id = e.unit_id
+       WHERE e.property_id = ?
+       ORDER BY e.period, CAST(COALESCE(u.unit_number, r.room_label) AS INTEGER), r.room_label`,
+      [property.id]
+    );
+    const deposits = all(
+      `SELECT d.*, r.room_label, u.unit_number FROM deposits d
+       LEFT JOIN rental_register r ON r.id = d.rental_register_id
+       LEFT JOIN units u ON u.id = d.unit_id
+       WHERE d.property_id = ?
+       ORDER BY d.tenant_name`,
+      [property.id]
+    );
+    const statusRow = get(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN status = 'caretaker_accommodation' THEN 1 ELSE 0 END) AS caretaker,
+              SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+              SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) AS verified,
+              SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+              SUM(CASE WHEN status = 'moved_out' THEN 1 ELSE 0 END) AS moved_out,
+              SUM(CASE WHEN details_verified = 0 THEN 1 ELSE 0 END) AS unverified_details,
+              SUM(CASE WHEN contact_verified = 0 THEN 1 ELSE 0 END) AS unverified_contacts
+       FROM rental_register WHERE property_id = ?`,
+      [property.id]
+    );
+    const depositRow = get(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total,
+              SUM(CASE WHEN verified = 0 THEN 1 ELSE 0 END) AS unverified
+       FROM deposits WHERE property_id = ?`,
+      [property.id]
+    );
+    const rentRow = get(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total,
+              MIN(period) AS first_period, MAX(period) AS last_period,
+              SUM(CASE WHEN date_verified = 0 THEN 1 ELSE 0 END) AS unverified_dates,
+              SUM(CASE WHEN amount_verified = 0 THEN 1 ELSE 0 END) AS unverified_amounts
+       FROM rent_register_entries WHERE property_id = ?`,
+      [property.id]
+    );
+    const occupancy = get(
+      `SELECT COUNT(*) AS units,
+              SUM(CASE WHEN status = 'occupied' THEN 1 ELSE 0 END) AS occupied,
+              SUM(CASE WHEN status = 'vacant' AND occupancy_known = 1 THEN 1 ELSE 0 END) AS vacant,
+              SUM(CASE WHEN occupancy_known = 0 THEN 1 ELSE 0 END) AS unknown_occupancy,
+              SUM(CASE WHEN details_verified = 0 THEN 1 ELSE 0 END) AS unverified_details,
+              SUM(CASE WHEN rent = 0 THEN 1 ELSE 0 END) AS rent_unknown
+       FROM units WHERE property_id = ?`,
+      [property.id]
+    );
+    res.json({
+      property: { id: property.id, name: property.name, status: property.status },
+      occupancy: {
+        units: Number(occupancy.units || 0),
+        occupied: Number(occupancy.occupied || 0),
+        vacant: Number(occupancy.vacant || 0),
+        unknown_occupancy: Number(occupancy.unknown_occupancy || 0),
+        unverified_details: Number(occupancy.unverified_details || 0),
+        rent_unknown: Number(occupancy.rent_unknown || 0),
+      },
+      register,
+      registerSummary: {
+        total: Number(statusRow.total || 0),
+        caretaker_accommodation: Number(statusRow.caretaker || 0),
+        pending: Number(statusRow.pending || 0),
+        verified: Number(statusRow.verified || 0),
+        active: Number(statusRow.active || 0),
+        moved_out: Number(statusRow.moved_out || 0),
+        unverified_details: Number(statusRow.unverified_details || 0),
+        unverified_contacts: Number(statusRow.unverified_contacts || 0),
+      },
+      rent,
+      rentSummary: {
+        count: Number(rentRow.count || 0),
+        total: Number(rentRow.total || 0),
+        first_period: rentRow.first_period,
+        last_period: rentRow.last_period,
+        unverified_dates: Number(rentRow.unverified_dates || 0),
+        unverified_amounts: Number(rentRow.unverified_amounts || 0),
+      },
+      deposits,
+      depositSummary: {
+        count: Number(depositRow.count || 0),
+        total: Number(depositRow.total || 0),
+        unverified: Number(depositRow.unverified || 0),
+      },
     });
   })
 );

@@ -77,6 +77,13 @@ export function monthLabel(period) {
   });
 }
 
+export function formatDate(value) {
+  if (!value) return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 export function addMonths(date, months) {
   const d = new Date(date);
   d.setMonth(d.getMonth() + months);

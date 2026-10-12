@@ -14,7 +14,7 @@
 ## Executive summary
 
 Smart Rentals has comprehensive automated coverage of its business workflows at the HTTP
-layer: **all 53 API regression tests, 19 staging smoke checks, and 5 backup/restore checks
+layer: **all 60 API regression tests, 19 staging smoke checks, and 5 backup/restore checks
 pass**, and the client production build succeeds (2,233 modules). The verification added 13
 new regression tests for previously unverified workflow areas (logout, M-Pesa STK initiation,
 duplicate callbacks, receipts, maintenance authorization, expense auditing, caretaker

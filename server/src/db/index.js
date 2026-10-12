@@ -224,6 +224,41 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sms_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+  phone TEXT NOT NULL,
+  message TEXT NOT NULL,
+  event_type TEXT NOT NULL DEFAULT 'general',
+  related_entity TEXT,
+  related_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sent','delivered','failed')),
+  provider TEXT,
+  provider_message_id TEXT,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  dedupe_key TEXT,
+  simulated INTEGER NOT NULL DEFAULT 0,
+  sent_at TEXT,
+  delivered_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS account_activations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'activation' CHECK (purpose IN ('activation','reset')),
+  property_id INTEGER REFERENCES properties(id) ON DELETE SET NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 CREATE TABLE IF NOT EXISTS expenses (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
@@ -259,6 +294,70 @@ CREATE TABLE IF NOT EXISTS utility_bills (
   UNIQUE(unit_id, period, category)
 );
 
+-- Real-world paper register import. Unverified tenancies are held here instead of
+-- in leases so the rent engine never computes arrears or sends rent SMS for them.
+CREATE TABLE IF NOT EXISTS rental_register (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
+  room_label TEXT NOT NULL,
+  tenant_name TEXT NOT NULL,
+  tenancy_role TEXT NOT NULL DEFAULT 'tenant' CHECK (tenancy_role IN ('tenant','new_tenant','caretaker')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','verified','active','moved_out','caretaker_accommodation')),
+  is_caretaker INTEGER NOT NULL DEFAULT 0,
+  deposit_amount INTEGER,
+  deposit_verified INTEGER NOT NULL DEFAULT 0,
+  details_verified INTEGER NOT NULL DEFAULT 0,
+  contact_verified INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'riesta_register',
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(property_id, room_label)
+);
+
+-- Deposits are tracked separately and never counted as rental income.
+CREATE TABLE IF NOT EXISTS deposits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
+  rental_register_id INTEGER REFERENCES rental_register(id) ON DELETE SET NULL,
+  tenant_name TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount >= 0),
+  currency TEXT NOT NULL DEFAULT 'KES',
+  status TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held','partially_refunded','refunded','forfeited','unknown')),
+  verified INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'riesta_register',
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE(property_id, unit_id, tenant_name, amount, source)
+);
+
+-- Historical rent taken from the paper register. Period is the register month;
+-- raw_date keeps the original handwriting so uncertain dates stay traceable.
+CREATE TABLE IF NOT EXISTS rent_register_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  property_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  unit_id INTEGER REFERENCES units(id) ON DELETE SET NULL,
+  rental_register_id INTEGER REFERENCES rental_register(id) ON DELETE SET NULL,
+  tenant_name TEXT NOT NULL,
+  period TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount >= 0),
+  currency TEXT NOT NULL DEFAULT 'KES',
+  raw_date TEXT,
+  paid_at TEXT,
+  date_verified INTEGER NOT NULL DEFAULT 0,
+  amount_verified INTEGER NOT NULL DEFAULT 0,
+  method TEXT,
+  receipt_number TEXT,
+  source TEXT NOT NULL DEFAULT 'riesta_register',
+  dedupe_key TEXT NOT NULL UNIQUE,
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_units_property ON units(property_id);
 CREATE INDEX IF NOT EXISTS idx_leases_unit ON leases(unit_id);
 CREATE INDEX IF NOT EXISTS idx_leases_tenant ON leases(tenant_id);
@@ -278,6 +377,19 @@ CREATE INDEX IF NOT EXISTS idx_utility_bills_property ON utility_bills(property_
 CREATE INDEX IF NOT EXISTS idx_utility_bills_unit ON utility_bills(unit_id);
 CREATE INDEX IF NOT EXISTS idx_utility_bills_tenant ON utility_bills(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_utility_bills_status ON utility_bills(status);
+CREATE INDEX IF NOT EXISTS idx_sms_user ON sms_messages(user_id);
+CREATE INDEX IF NOT EXISTS idx_sms_property ON sms_messages(property_id);
+CREATE INDEX IF NOT EXISTS idx_sms_status ON sms_messages(status);
+CREATE INDEX IF NOT EXISTS idx_sms_dedupe ON sms_messages(dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_activation_user ON account_activations(user_id);
+CREATE INDEX IF NOT EXISTS idx_activation_token ON account_activations(token_hash);
+CREATE INDEX IF NOT EXISTS idx_rental_register_property ON rental_register(property_id);
+CREATE INDEX IF NOT EXISTS idx_rental_register_unit ON rental_register(unit_id);
+CREATE INDEX IF NOT EXISTS idx_deposits_property ON deposits(property_id);
+CREATE INDEX IF NOT EXISTS idx_deposits_unit ON deposits(unit_id);
+CREATE INDEX IF NOT EXISTS idx_rent_register_property ON rent_register_entries(property_id);
+CREATE INDEX IF NOT EXISTS idx_rent_register_unit ON rent_register_entries(unit_id);
+CREATE INDEX IF NOT EXISTS idx_rent_register_period ON rent_register_entries(period);
 `;
 
 let db = null;
@@ -333,12 +445,41 @@ function ensureMigrations(database) {
   if (!auditCols.includes('property_id')) database.exec('ALTER TABLE audit_logs ADD COLUMN property_id INTEGER');
   if (!auditCols.includes('actor_role')) database.exec('ALTER TABLE audit_logs ADD COLUMN actor_role TEXT');
   database.exec('CREATE INDEX IF NOT EXISTS idx_audit_property ON audit_logs(property_id)');
+
+  const userCols = columnNames(database, 'users');
+  if (!userCols.includes('sms_opt_out')) {
+    database.exec('ALTER TABLE users ADD COLUMN sms_opt_out INTEGER NOT NULL DEFAULT 0');
+  }
+
+  const unitCols = columnNames(database, 'units');
+  if (!unitCols.includes('occupancy_known')) {
+    database.exec('ALTER TABLE units ADD COLUMN occupancy_known INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!unitCols.includes('details_verified')) {
+    database.exec('ALTER TABLE units ADD COLUMN details_verified INTEGER NOT NULL DEFAULT 1');
+  }
   try {
     database.exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_leases_active_unit ON leases(unit_id) WHERE status = 'active'");
   } catch {
     // Legacy databases may already contain duplicate active leases on the same unit.
     // The application-level check (activeLeaseOfUnit) remains the primary guard.
   }
+
+  try {
+    database.exec('CREATE INDEX IF NOT EXISTS idx_payments_lease_period_status ON payments(lease_id, period, status)');
+  } catch {}
+  try {
+    database.exec("CREATE INDEX IF NOT EXISTS idx_payments_property_created_status ON payments(property_id, created_at DESC) WHERE status = 'completed'");
+  } catch {}
+  try {
+    database.exec('CREATE INDEX IF NOT EXISTS idx_leases_property_status ON leases(property_id, status)');
+  } catch {}
+  try {
+    database.exec("CREATE INDEX IF NOT EXISTS idx_notifications_user_read_created ON notifications(user_id, is_read, created_at DESC)");
+  } catch {}
+  try {
+    database.exec('CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC)');
+  } catch {}
 }
 
 export function openDb(dbPath) {

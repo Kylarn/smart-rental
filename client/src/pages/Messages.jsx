@@ -81,7 +81,7 @@ export default function Messages() {
                   <Avatar name={m.counterpart_name} src={m.counterpart_avatar} size={40} />
                   <div className="msg-content">
                     <div className="flex-between">
-                      <strong>{m.counterpart_name}{box === 'sent' ? '' : ''}<span className="cell-muted small"> · {titleCase(m.counterpart_role)}</span></strong>
+                      <strong>{m.counterpart_name}<span className="cell-muted small"> · {titleCase(m.counterpart_role)}</span></strong>
                       <span className="cell-muted small">{timeAgo(m.created_at)}</span>
                     </div>
                     <div className="msg-subject">{m.subject}</div>
@@ -121,7 +121,7 @@ function ComposeModal({ open, onClose, onSent, replyTo }) {
     } else {
       api.get('/api/leases').then((d) => {
         const active = (d.leases || []).find((l) => l.status === 'active');
-        if (active?.landlord_id) setRecipients([{ id: active.landlord_id, full_name: 'My landlord', role: 'landlord' }]);
+        if (active?.landlord_id) setRecipients([{ id: active.landlord_id, full_name: active.landlord_name || 'My landlord', role: 'landlord' }]);
       }).catch(() => {});
     }
   }, [open, replyTo, user]);

@@ -91,17 +91,20 @@ router.get(
     }
     let sql = SELECT_PAYMENT;
     if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
-    sql += ' ORDER BY pay.created_at DESC LIMIT 500';
-    const rows = all(sql, params);
+    sql += ' ORDER BY pay.created_at DESC';
+
+    const allRows = all(sql, params);
 
     let stats = null;
     if (req.user.role !== 'tenant') {
-      const completed = rows.filter((r) => r.status === 'completed');
+      const completed = allRows.filter((r) => r.status === 'completed');
+      const pending = allRows.filter((r) => ['pending', 'processing'].includes(r.status)).length;
+      const failed = allRows.filter((r) => r.status === 'failed').length;
       stats = {
-        total: rows.length,
+        total: allRows.length,
         completed: completed.length,
-        pending: rows.filter((r) => ['pending', 'processing'].includes(r.status)).length,
-        failed: rows.filter((r) => r.status === 'failed').length,
+        pending,
+        failed,
         amount: completed.reduce((s, r) => s + Number(r.amount), 0),
       };
     } else {
@@ -109,10 +112,34 @@ router.get(
       stats = {
         arrears: lease ? leaseArrears(lease).total : 0,
         lease_rent: lease?.rent || 0,
-        total_paid: rows.filter((r) => r.status === 'completed').reduce((s, r) => s + Number(r.amount), 0),
+        total_paid: allRows.filter((r) => r.status === 'completed').reduce((s, r) => s + Number(r.amount), 0),
       };
     }
-    res.json({ payments: rows, stats });
+
+    const page = req.query.page ? Number(req.query.page) : null;
+    const limit = req.query.limit ? Number(req.query.limit) : null;
+    const hasPagination = Number.isInteger(page) && page > 0 && Number.isInteger(limit) && limit > 0;
+
+    if (!hasPagination) {
+      return res.json({ payments: allRows.slice(0, 500), stats, total: allRows.length });
+    }
+
+    const total = allRows.length;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    const currentPage = Math.min(page, pages);
+    const offset = (currentPage - 1) * limit;
+    const paginated = allRows.slice(offset, offset + limit);
+
+    res.json({
+      payments: paginated,
+      stats,
+      pagination: {
+        page: currentPage,
+        limit,
+        total,
+        pages,
+      },
+    });
   })
 );
 

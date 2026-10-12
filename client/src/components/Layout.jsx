@@ -23,9 +23,11 @@ import {
   Menu,
   X,
   ClipboardList,
+  Send,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
 import { api } from '../lib/api.js';
+import { titleCase } from '../lib/format.js';
 import { Avatar } from './ui.jsx';
 
 const NAV = {
@@ -44,6 +46,8 @@ const NAV = {
     { to: '/app/messages', label: 'Messages', icon: MessageSquare },
     { to: '/app/announcements', label: 'Announcements', icon: Megaphone },
     { to: '/app/reports', label: 'Reports', icon: BarChart3 },
+    { to: '/app/register', label: 'Rent Register', icon: ClipboardList },
+    { to: '/app/sms', label: 'SMS Log', icon: Send },
   ],
   caretaker: [
     { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -59,6 +63,8 @@ const NAV = {
     { to: '/app/announcements', label: 'Announcements', icon: Megaphone },
     { to: '/app/messages', label: 'Messages', icon: MessageSquare },
     { to: '/app/reports', label: 'Reports', icon: BarChart3 },
+    { to: '/app/register', label: 'Rent Register', icon: ClipboardList },
+    { to: '/app/sms', label: 'SMS Log', icon: Send },
   ],
   tenant: [
     { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -69,6 +75,7 @@ const NAV = {
     { to: '/app/applications', label: 'Applications', icon: Inbox },
     { to: '/app/messages', label: 'Messages', icon: MessageSquare },
     { to: '/app/announcements', label: 'Announcements', icon: Megaphone },
+    { to: '/app/sms', label: 'SMS Log', icon: Send },
   ],
   admin: [
     { to: '/app', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -79,8 +86,10 @@ const NAV = {
     { to: '/app/bills', label: 'Utility Bills', icon: Receipt },
     { to: '/app/maintenance', label: 'Maintenance', icon: Wrench },
     { to: '/app/reports', label: 'Reports', icon: BarChart3 },
+    { to: '/app/register', label: 'Rent Register', icon: ClipboardList },
     { to: '/app/admin/audit', label: 'Audit Log', icon: ScrollText },
     { to: '/app/admin/settings', label: 'Settings', icon: Settings },
+    { to: '/app/sms', label: 'SMS Log', icon: Send },
   ],
 };
 
@@ -162,7 +171,7 @@ export default function Layout() {
               <Avatar name={user?.full_name} src={user?.avatar_url} size={34} />
               <span className="user-meta">
                 <strong>{user?.full_name}</strong>
-                <em>{user?.role}</em>
+                <em>{titleCase(user?.role)}</em>
               </span>
             </NavLink>
             <button className="icon-btn" onClick={handleLogout} title="Sign out" aria-label="Sign out">

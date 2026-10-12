@@ -3,6 +3,7 @@ import { all, get, insert, run } from '../db/index.js';
 import { asyncHandler, notFound, forbidden, badRequest, validate, parseJson } from '../utils/helpers.js';
 import { requireAuth } from '../middleware/auth.js';
 import { audit, notify, unreadCount } from '../services/notify.js';
+import { smsEvents } from '../services/sms/events.js';
 import { isCaretakerOfProperty } from '../services/rent.js';
 
 const router = express.Router();
@@ -185,6 +186,14 @@ router.post(
         body: String(req.body.body).trim(),
         link: '/tenant/notifications',
         dedupeKey: `ann-${id}`,
+      })
+    );
+    tenants.forEach((t) =>
+      smsEvents.announcement({
+        userId: t.tenant_id,
+        announcementId: id,
+        propertyId: property.id,
+        title: String(req.body.title).trim(),
       })
     );
     if (req.user.role === 'caretaker') {

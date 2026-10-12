@@ -153,10 +153,11 @@ router.get(
       settings: {
         platform_name: 'Smart Rentals',
         support_email: 'support@smartrentals.co.ke',
-        support_phone: '0700000000',
+        support_phone: '',
         currency: 'KES',
         registration_enabled: 'true',
         mpesa_mode: 'sandbox',
+        sms_enabled: 'true',
         ...settings,
       },
     });
@@ -173,6 +174,8 @@ router.put(
       'currency',
       'registration_enabled',
       'mpesa_mode',
+      'sms_enabled',
+      'sms_provider',
       'rent_reminder_days',
       'lease_expiry_days',
     ];

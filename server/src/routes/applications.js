@@ -1,7 +1,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { all, get, insert, run, tx } from '../db/index.js';
-import { asyncHandler, notFound, forbidden, badRequest, validate, normalizePhone, parseJson } from '../utils/helpers.js';
+import { asyncHandler, notFound, forbidden, badRequest, validate, normalizePhone, parseJson, formatDate } from '../utils/helpers.js';
 import { requireAuth } from '../middleware/auth.js';
 import { audit, notify } from '../services/notify.js';
 import { activeLeaseOfUnit, isCaretakerOfProperty } from '../services/rent.js';
@@ -150,7 +150,7 @@ router.patch(
         notify(tenantId, {
           type: 'application',
           title: 'Application approved',
-          body: `You have been assigned Unit ${unit.unit_number} at ${app.property_name}. Your lease starts ${start}.`,
+          body: `You have been assigned Unit ${unit.unit_number} at ${app.property_name}. Your lease starts ${formatDate(start)}.`,
           link: '/tenant/lease',
           dedupeKey: `app-assigned-${id}`,
         });
@@ -169,8 +169,8 @@ router.patch(
 
     const messages = {
       under_review: 'Your application is now under review.',
-      info_requested: `The property manager requested more information: ${req.body.reviewer_notes || 'please check your messages.'}`,
-      approved: 'Your application has been approved! The property manager will assign you a unit shortly.',
+      info_requested: `The landlord requested more information: ${req.body.reviewer_notes || 'please check your messages.'}`,
+      approved: 'Your application has been approved! The landlord will assign you a unit shortly.',
       rejected: `Your application was not successful. ${req.body.reviewer_notes || ''}`.trim(),
       pending: 'Your application was moved back to pending.',
     };

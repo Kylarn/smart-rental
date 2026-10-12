@@ -63,7 +63,7 @@ function LandlordDashboard({ data, user }) {
       <div className="grid grid-4">
         <StatCard label="Collected this month" value={shortKes(stats.collectedThisMonth)} icon={Wallet} tone="green" hint={`Expected ${shortKes(stats.expectedRent)}/mo`} />
         <StatCard label="Outstanding arrears" value={shortKes(stats.outstanding)} icon={AlertTriangle} tone={stats.outstanding > 0 ? 'red' : 'green'} />
-        <StatCard label="Occupancy" value={`${stats.occupancyRate}%`} icon={Building2} hint={`${stats.occupied}/${stats.units} units occupied`} />
+        <StatCard label="Occupancy" value={`${stats.occupancyRate}%`} icon={Building2} hint={`${stats.occupied}/${stats.units - (stats.unknown || 0)} known units occupied${stats.unknown ? ` · ${stats.unknown} unknown` : ''}`} />
         <StatCard label="Open maintenance" value={stats.pendingMaintenance} icon={Wrench} tone="amber" />
       </div>
 
@@ -148,9 +148,9 @@ function LandlordDashboard({ data, user }) {
                 <div key={p.id}>
                   <div className="flex-between mb-8">
                     <strong className="small">{p.name}</strong>
-                    <span className="cell-muted">{p.occupied}/{p.units} · {kes(p.monthly_rent)}/mo</span>
+                    <span className="cell-muted">{p.occupied}/{p.units - (p.unknown || 0)} known · {kes(p.monthly_rent)}/mo{p.unknown ? ` · ${p.unknown} unknown` : ''}</span>
                   </div>
-                  <Progress value={p.occupied} max={p.units || 1} tone={p.occupied === p.units ? 'green' : 'blue'} />
+                  <Progress value={p.occupied} max={Math.max((p.units || 0) - (p.unknown || 0), 1)} tone={p.occupied === (p.units - (p.unknown || 0)) ? 'green' : 'blue'} />
                 </div>
               ))}
             </div>
@@ -221,7 +221,7 @@ function CaretakerDashboard({ data, user }) {
       </div>
 
       <div className="grid grid-4">
-        <StatCard label="Occupancy" value={`${stats.occupancyRate}%`} icon={Building2} hint={`${stats.occupied}/${stats.units} units · ${stats.properties} properties`} />
+        <StatCard label="Occupancy" value={`${stats.occupancyRate}%`} icon={Building2} hint={`${stats.occupied}/${stats.units - (stats.unknown || 0)} known units · ${stats.properties} properties${stats.unknown ? ` · ${stats.unknown} unknown` : ''}`} />
         <StatCard label="Collected this month" value={shortKes(stats.collectedMonth)} icon={Wallet} tone="green" hint={`Expected ${shortKes(stats.monthlyRent)}/mo`} />
         <StatCard label="Outstanding arrears" value={shortKes(stats.arrearsTotal)} icon={AlertTriangle} tone={stats.arrearsTotal > 0 ? 'red' : 'green'} />
         <StatCard label="Open maintenance" value={stats.maintenance_open} icon={Wrench} tone="amber" hint={`${stats.complaints} complaints`} />

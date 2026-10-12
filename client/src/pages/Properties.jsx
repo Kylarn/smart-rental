@@ -95,9 +95,12 @@ export default function Properties() {
                 <div className="mt-8">
                   <div className="flex-between small muted mb-8">
                     <span>Occupancy</span>
-                    <span>{p.stats?.occupied || 0}/{p.stats?.units || 0} units · {p.stats?.occupancyRate || 0}%</span>
+                    <span>
+                      {p.stats?.occupied || 0}/{Math.max((p.stats?.units || 0) - (p.stats?.unknown || 0), 0)} known units · {p.stats?.occupancyRate || 0}%
+                      {p.stats?.unknown ? ` · ${p.stats.unknown} unknown` : ''}
+                    </span>
                   </div>
-                  <Progress value={p.stats?.occupied || 0} max={p.stats?.units || 1} tone={(p.stats?.occupancyRate || 0) === 100 ? 'green' : 'blue'} />
+                  <Progress value={p.stats?.occupied || 0} max={Math.max((p.stats?.units || 0) - (p.stats?.unknown || 0), 1)} tone={(p.stats?.occupancyRate || 0) === 100 ? 'green' : 'blue'} />
                 </div>
                 <div className="property-foot">
                   <span className="price">{kes(p.stats?.potentialRent || 0)}<small> /mo potential</small></span>

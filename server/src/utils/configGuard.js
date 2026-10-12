@@ -38,5 +38,20 @@ export function validateEnvConfig(env, values = {}) {
     warnings.push('CLIENT_ORIGIN is not set; CORS will allow no cross-origin frontends (same-origin SPA still works)');
   }
 
+  const smsProvider = process.env.SMS_PROVIDER || 'mock';
+  if (smsProvider === 'mock') {
+    warnings.push('SMS is running in mock mode: no real text messages will be delivered');
+  } else if (smsProvider === 'http') {
+    if (!process.env.SMS_API_URL || !process.env.SMS_API_KEY) {
+      errors.push('SMS_API_URL and SMS_API_KEY are required in production when SMS_PROVIDER=http');
+    }
+  } else if (smsProvider !== 'disabled' && smsProvider !== '') {
+    warnings.push(`Unknown SMS_PROVIDER "${smsProvider}": falling back to mock mode`);
+  }
+
+  if (!process.env.PUBLIC_BASE_URL && process.env.CLIENT_ORIGIN && !process.env.CLIENT_ORIGIN.startsWith('https://')) {
+    warnings.push('PUBLIC_BASE_URL/CLIENT_ORIGIN should be an HTTPS URL in production so activation links are secure');
+  }
+
   return { errors, warnings };
 }

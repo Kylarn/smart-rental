@@ -42,9 +42,10 @@ server/src/index.js     process entry: boots app, payment recovery, scheduler
 server/src/app.js       Express app: CORS, JSON, cookies, static, routes, SPA fallback
 server/src/config.js    env loading + startup safety validation
 server/src/db/index.js  schema + idempotent migrations (openDb)
-server/src/db/seed.js   demo dataset (only for staging/dev)
+server/src/db/seed.js   Riesta register seed (staging/dev only)
+server/scripts/import-riesta.mjs   idempotent Riesta import (never deletes)
 server/src/db/bootstrap.js  removes DB files to start fresh
-server/tests/api.test.js    31 API/migration/isolation tests
+server/tests/api.test.js    60 API/migration/isolation tests
 server/tests/smoke.mjs      end-to-end staging smoke (API + SPA + restart) 
 server/tests/backup.restore.mjs  backup/restore verification on a disposable DB
 server/scripts/backup.js    verified SQLite backup script
@@ -78,6 +79,13 @@ Environment variables can also be provided by the host/process manager.
 | `BACKUP_DIR` | no | Backup output directory. Default `<root>/backups`. |
 | `MPESA_ENV` | for M-Pesa | `sandbox` or `production`. Required to be `production` for live payments. |
 | `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL` | for M-Pesa | Daraja credentials. Callback URL must be public HTTPS in production. |
+| `SMS_ENABLED` | no | `0` disables all outbound SMS. Default `1`. |
+| `SMS_PROVIDER` | for SMS | `mock` (default, logs only — no real texts), `http` (real gateway) or `disabled`. |
+| `SMS_SENDER_ID` | for SMS | Alphanumeric sender ID / short code shown to recipients. |
+| `SMS_API_URL`, `SMS_API_KEY` | for `http` provider | Gateway endpoint (POST JSON) and API key. Required for the `http` provider to be `ready`. |
+| `SMS_MAX_ATTEMPTS` | no | Retry ceiling for failed sends (default `3`). |
+| `PUBLIC_BASE_URL` | recommended | Public URL used to build tenant activation links, e.g. `https://app.example.com`. Falls back to `CLIENT_ORIGIN` or `http://localhost:5173`. |
+| `ACTIVATION_TTL_HOURS` | no | Lifetime of a tenant activation link in hours (default `48`). |
 | `RATE_LIMIT_*` | no | Optional overrides for rate limits (see below). |
 
 Generate a JWT secret:
@@ -94,9 +102,13 @@ The process **refuses to start in production** if:
 - `COOKIE_SECURE` is not `1`.
 - M-Pesa credentials are present but `MPESA_ENV` is not `production`.
 - M-Pesa is in production mode but `MPESA_CALLBACK_URL` is missing or not `https://`.
+- SMS is enabled with the `http` provider but `SMS_API_URL`/`SMS_API_KEY` are missing.
 
 If M-Pesa is not configured at all, the server starts with a warning and STK Push is disabled
 (manual/recorded payments still work). It will never silently fall back to mock mode in production.
+
+If SMS is left at the default `mock` provider, messages are logged and marked **simulated** — no real
+texts are sent. Switch `SMS_PROVIDER=http` and supply gateway credentials to deliver real messages.
 
 ---
 
@@ -129,25 +141,28 @@ The schema is created automatically and **idempotently** the first time the serv
 database. Migrations run on every boot and bring older databases up to the current schema
 without dropping data (verified against an old-schema fixture and a copy of the real DB).
 
-- **Staging / demo:** `npm run seed` loads the full demo dataset and demo accounts.
+- **Staging:** `npm run seed` loads the Riesta Apartments register (real records only; no demo
+  tenants). Use `npm run import:riesta` to add/refresh those records idempotently without deleting.
 - **Production:** start with an empty database. The app creates the schema on first boot.
   There is no self-service admin signup (registration only creates landlord/tenant), so the
   first administrator must be created once, either by:
-  - running `npm run seed` and removing demo accounts, or
+  - running `npm run seed` (set `SEED_ADMIN_PASSWORD` to a strong value) and removing the
+    placeholder owner, or
   - inserting an admin row directly into `users` (bcrypt password hash).
 
   Creating the production admin is a **pre-launch step that must be performed deliberately**.
+  In production the seed **never** uses the demo password: it uses `SEED_ADMIN_PASSWORD` if set,
+  otherwise it generates a random password and prints it once. On boot the server warns if an
+  active admin still has the default demo password.
 
-Demo accounts created by `npm run seed` (staging only — never ship these to production):
+Account created by `npm run seed` in **staging/development only** (never ship this to production):
 
 | Role | Email | Password |
 | --- | --- | --- |
-| Admin | `admin@smartrentals.co.ke` | `Admin@123` |
-| Landlord | `james@landlord.co.ke` | `Landlord@123` |
-| Landlord | `grace@landlord.co.ke` | `Landlord@123` |
-| Caretaker | `caretaker@smartrentals.co.ke` | `Caretaker@123` |
-| Caretaker | `ruth.caretaker@smartrentals.co.ke` | `Caretaker@123` |
-| Tenant | `peter.otieno@tenant.co.ke` | `Tenant@123` |
+| Admin | `admin@smartrentals.co.ke` | `Admin@123` (demo) |
+
+> Riesta's owner is a **suspended placeholder** (`owner.pending@riesta.local`, unusable password)
+> until the real owner details are supplied. No tenant logins exist because no contacts are known.
 
 ### Reverse proxy / TLS
 
@@ -259,10 +274,10 @@ provided (`MPESA_*` are blank). The callback/STK logic is covered by automated t
 
 ## 8. Verification performed
 
-- `npm run test:api` — **31/31 pass** (RBAC/isolation, caretaker scope, move-out settlement,
+- `npm run test:api` — **60/60 pass** (RBAC/isolation, caretaker scope, move-out settlement,
   migration from old schema and from a copy of the real DB, production config guard, rate
   limiting, M-Pesa mock/production guard, upload signature validation).
-- `npm run test:smoke` — **18/18 pass** against a disposable seeded DB: health, SPA fallback,
+- `npm run test:smoke` — **19/19 pass** against a disposable seeded DB: health, SPA fallback,
   legacy link resolution, every `/app/*` route served as HTML on refresh, JSON 404 for unknown
   API, auth cookie flags, admin/landlord/caretaker/tenant workflows, scoping, `nosniff` on
   uploads, no 500s, and **data survives a restart**.

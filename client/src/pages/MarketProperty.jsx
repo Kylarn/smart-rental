@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { MapPin, Building2, BedDouble, Ruler, CheckCircle2, ArrowLeft, Phone, Mail } from 'lucide-react';
-import { api } from '../lib/api.js';
-import { kes, today, addDays } from '../lib/format.js';
+import { api, qs } from '../lib/api.js';
+import { kes, date, today, addDays, titleCase } from '../lib/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useToast } from '../context/ToastContext.jsx';
 import { Button, Field, Input, Select, Textarea, Modal, Spinner, StatusBadge } from '../components/ui.jsx';
@@ -37,7 +37,7 @@ export default function MarketProperty() {
   }
 
   const { property: p, units, landlord, myApplications } = data;
-  const vacant = units.filter((u) => u.status === 'vacant');
+  const vacant = units.filter((u) => u.status === 'vacant' && u.occupancy_known !== 0);
 
   return (
     <div className="market">
@@ -77,7 +77,7 @@ export default function MarketProperty() {
                 <div>
                   <h1 style={{ fontSize: 24 }}>{p.name}</h1>
                   <span className="property-loc mt-8" style={{ display: 'flex' }}>
-                    <MapPin size={15} /> {p.address || p.area || p.county}, {p.county}
+                    <MapPin size={15} /> {[p.address, p.area, p.county].filter(Boolean).join(', ')}
                   </span>
                 </div>
                 <StatusBadge status={p.status} />
@@ -144,13 +144,13 @@ export default function MarketProperty() {
             </div>
             <p className="muted small mt-8">Managed by {p.landlord_name}</p>
             <div className="divider" />
-            <div className="kv"><span>Deposit</span><span>From {kes(vacant[0]?.deposit || 0)}</span></div>
+            <div className="kv"><span>Deposit</span><span>{vacant.length ? `From ${kes(vacant[0].deposit)}` : '—'}</span></div>
             <div className="kv"><span>Property type</span><span>{p.property_type}</span></div>
             <div className="kv"><span>County</span><span>{p.county}</span></div>
 
             {myApplications?.length ? (
               <div className="notice notice-warn mt-16">
-                You already applied to this property ({myApplications[0].status.replace(/_/g, ' ')}).
+                You already applied to this property ({titleCase(myApplications[0].status)}).
               </div>
             ) : null}
 
@@ -171,6 +171,12 @@ export default function MarketProperty() {
               <span className="flex"><Mail size={14} /> {landlord?.email || '—'}</span>
             </div>
           </div>
+        </div>
+
+        <div className="detail-box mt-16">
+          <h3 className="mb-8">Check application status</h3>
+          <p className="muted small mb-16">Applied before? Enter your reference and email to see the latest status.</p>
+          <StatusCheck />
         </div>
       </div>
 
@@ -201,6 +207,7 @@ function ApplyModal({ open, onClose, property, units, user, onDone }) {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [result, setResult] = useState(null);
 
   useEffect(() => {
     if (user) setForm((f) => ({ ...f, full_name: user.full_name || f.full_name, email: user.email || f.email, phone: user.phone || f.phone }));
@@ -211,9 +218,9 @@ function ApplyModal({ open, onClose, property, units, user, onDone }) {
     setLoading(true);
     setError('');
     try {
-      await api.post(`/api/market/properties/${property.id}/apply`, { ...form, unit_id: form.unit_id || null });
+      const data = await api.post(`/api/market/properties/${property.id}/apply`, { ...form, unit_id: form.unit_id || null });
+      setResult({ reference: data.reference, email: form.email });
       toast.success('Application submitted successfully!');
-      onDone();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -222,6 +229,35 @@ function ApplyModal({ open, onClose, property, units, user, onDone }) {
   };
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  if (result) {
+    return (
+      <Modal open={open} onClose={onDone} title="Application submitted" size="md">
+        <div className="empty">
+          <CheckCircle2 size={32} />
+          <h4>Thank you!</h4>
+          <p>Your application for {property.name} has been received and is pending review.</p>
+          <div className="field">
+            <span className="field-label">Your reference</span>
+            <div className="flex">
+              <Input value={result.reference} readOnly onFocus={(e) => e.target.select()} />
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => navigator.clipboard?.writeText(result.reference).then(() => toast.success('Reference copied'))}
+              >
+                Copy
+              </Button>
+            </div>
+            <span className="field-hint">Keep this reference. Use “Check application status” below to track progress with it and {result.email}.</span>
+          </div>
+        </div>
+        <div className="modal-foot" style={{ padding: 0, border: 'none', marginTop: 8 }}>
+          <Button type="button" onClick={onDone}>Done</Button>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal open={open} onClose={onClose} title={`Apply for ${property.name}`} size="md">
@@ -337,5 +373,59 @@ function ContactModal({ open, onClose, property, user, mode, toast }) {
         </div>
       </form>
     </Modal>
+  );
+}
+
+function StatusCheck() {
+  const [form, setForm] = useState({ reference: '', email: '' });
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setResult(null);
+    try {
+      const d = await api.get(`/api/market/applications/status${qs({ reference: form.reference, email: form.email })}`);
+      setResult(d);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="flex-col">
+      <div className="form-row">
+        <Field label="Reference">
+          <Input
+            value={form.reference}
+            onChange={(e) => setForm({ ...form, reference: e.target.value })}
+            placeholder="APP-000123"
+            required
+          />
+        </Field>
+        <Field label="Email">
+          <Input
+            type="email"
+            value={form.email}
+            onChange={(e) => setForm({ ...form, email: e.target.value })}
+            placeholder="you@example.com"
+            required
+          />
+        </Field>
+      </div>
+      {error ? <div className="notice notice-danger mb-16">{error}</div> : null}
+      {result ? (
+        <div className="notice notice-info mb-16">
+          {result.property_name}: <StatusBadge status={result.status} /> (updated {date(result.updated_at || result.submitted_at)})
+          {result.message ? <div className="small mt-8">{result.message}</div> : null}
+        </div>
+      ) : null}
+      <Button type="submit" variant="secondary" loading={loading}>Check status</Button>
+    </form>
   );
 }

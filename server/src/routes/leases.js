@@ -1,7 +1,7 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import { all, get, insert, run, tx } from '../db/index.js';
-import { asyncHandler, notFound, badRequest, forbidden, conflict, validate, normalizePhone, parseJson } from '../utils/helpers.js';
+import { asyncHandler, notFound, badRequest, forbidden, conflict, validate, normalizePhone, parseJson, formatDate } from '../utils/helpers.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { audit, notify } from '../services/notify.js';
 import { leaseArrears, leaseCoverage, activeLeaseOfUnit, isCaretakerOfProperty } from '../services/rent.js';
@@ -31,11 +31,13 @@ function serializeLease(l) {
 const SELECT_LEASE = `
   SELECT l.*, p.name AS property_name, p.landlord_id, p.county, p.area,
          u.unit_number, u.unit_type, u.floor, u.status AS unit_status,
-         t.full_name AS tenant_name, t.email AS tenant_email, t.phone AS tenant_phone, t.avatar_url AS tenant_avatar
+         t.full_name AS tenant_name, t.email AS tenant_email, t.phone AS tenant_phone, t.avatar_url AS tenant_avatar,
+         lo.full_name AS landlord_name
   FROM leases l
   JOIN properties p ON p.id = l.property_id
   JOIN units u ON u.id = l.unit_id
-  JOIN users t ON t.id = l.tenant_id`;
+  JOIN users t ON t.id = l.tenant_id
+  JOIN users lo ON lo.id = p.landlord_id`;
 
 router.get(
   '/',
@@ -198,7 +200,7 @@ router.post(
     notify(tenantId, {
       type: 'lease',
       title: 'New lease created',
-      body: `Unit ${unit.unit_number} at ${unit.property_name} is yours from ${req.body.start_date}.`,
+      body: `Unit ${unit.unit_number} at ${unit.property_name} is yours from ${formatDate(req.body.start_date)}.`,
       link: '/tenant/lease',
       dedupeKey: `lease-${leaseId}`,
     });

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ClipboardList, DoorOpen, Plus, CheckCircle2, Trash2, LogOut } from 'lucide-react';
 import { api } from '../lib/api.js';
-import { kes, date, today } from '../lib/format.js';
+import { kes, date, today, titleCase } from '../lib/format.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { Button, Card, Field, Input, Select, Modal, Spinner, EmptyState, StatusBadge, Tabs } from '../components/ui.jsx';
 
@@ -48,7 +48,7 @@ export default function MoveOuts() {
       <div className="page-head">
         <div>
           <h1>Move-Outs</h1>
-          <p>Record tenant departures, inspects and settle outstanding balances.</p>
+          <p>Record tenant departures, inspect units and settle outstanding balances.</p>
         </div>
         <div className="page-actions">
           <Button onClick={load} variant="secondary">Refresh</Button>
@@ -65,7 +65,7 @@ export default function MoveOuts() {
       <Tabs
         tabs={[
           { value: 'active', label: 'Active leases', count: leases.length },
-          { value: 'moveouts', label: 'Move-out records', count: moveOuts.length },
+          { value: 'moveouts', label: 'Move-Out records', count: moveOuts.length },
         ]}
         value={tab}
         onChange={setTab}
@@ -115,7 +115,7 @@ export default function MoveOuts() {
                     <td className="cell-muted">{date(m.move_out_date)}</td>
                     <td className="cell-strong">{kes(m.outstanding_rent)}</td>
                     <td>{kes(m.damages_cost)}</td>
-                    <td className="cell-muted">{kes(m.deposit_held)}{m.refund_status !== 'pending' ? ` · ${m.refund_status}` : ''}</td>
+                    <td className="cell-muted">{kes(m.deposit_held)}{m.refund_status && m.refund_status !== 'pending' ? ` · ${titleCase(m.refund_status)}` : ''}</td>
                     <td><StatusBadge status={m.status} /></td>
                     <td className="row-actions">
                       {m.status === 'initiated' ? (

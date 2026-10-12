@@ -1913,6 +1913,173 @@ await test('utility bills: caretaker only manages assigned properties', async ()
   );
 });
 
+const tick = (ms = 80) => new Promise((r) => setTimeout(r, ms));
+
+await test('SMS: completed payments queue a mock message and history is role-scoped', async () => {
+  const landlord = session();
+  await register(landlord, { role: 'landlord', full_name: 'SMS Landlord', email: 'sms.l@test.ke' });
+  const prop = (await (await landlord.request('POST', '/api/properties', { name: 'SMS Court', county: 'Nairobi', property_type: 'Apartment' })).json()).property;
+  const unit = (await (await landlord.request('POST', '/api/units', { property_id: prop.id, unit_number: 'S1', unit_type: '1 Bedroom', rent: 12000 })).json()).unit;
+  const tenant = await (await landlord.request('POST', '/api/tenants', {
+    full_name: 'SMS Tenant', email: 'sms.t@test.ke', phone: '0700111222', unit_id: unit.id,
+    start_date: '2026-01-05', end_date: '2027-01-05', password: 'Tenant@123',
+  })).json();
+  const pay = await landlord.request('POST', '/api/payments/record', { tenant_id: tenant.tenant_id, amount: 12000, method: 'cash' });
+  assert.equal(pay.status, 201);
+  await tick();
+
+  const row = dbGet('SELECT * FROM sms_messages WHERE user_id = ? AND event_type = ?', [tenant.tenant_id, 'payment_received']);
+  assert.ok(row, 'a payment SMS is queued for the tenant');
+  assert.equal(row.status, 'sent');
+  assert.equal(row.simulated, 1, 'mock provider marks messages simulated (no real SMS is sent)');
+  assert.equal(row.phone, '0700111222');
+  assert.equal(row.provider, 'mock');
+
+  const ts = session();
+  assert.equal((await ts.request('POST', '/api/auth/login', { email: 'sms.t@test.ke', password: 'Tenant@123' })).status, 200);
+  const mine = await (await ts.request('GET', '/api/sms')).json();
+  assert.ok(mine.messages.length >= 1);
+  assert.ok(mine.messages.every((m) => m.user_id === tenant.tenant_id), 'tenant only sees their own SMS');
+
+  const outsider = session();
+  await register(outsider, { role: 'landlord', full_name: 'SMS Outsider', email: 'sms.out@test.ke' });
+  const outList = await (await outsider.request('GET', '/api/sms')).json();
+  assert.equal(outList.messages.length, 0, 'an unrelated landlord cannot see the SMS');
+
+  const llList = await (await landlord.request('GET', '/api/sms')).json();
+  assert.ok(llList.messages.some((m) => m.user_id === tenant.tenant_id), 'the owning landlord sees property SMS');
+});
+
+await test('SMS: delivery webhook updates status and ignores unknown ids', async () => {
+  const row = dbGet("SELECT * FROM sms_messages WHERE status = 'sent' AND provider_message_id IS NOT NULL ORDER BY id DESC LIMIT 1");
+  assert.ok(row, 'a sent message with a provider id exists');
+  const res = await fetch(`${base}/api/sms/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider_message_id: row.provider_message_id, status: 'delivered' }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).updated, true);
+  assert.equal(dbGet('SELECT status FROM sms_messages WHERE id = ?', [row.id]).status, 'delivered');
+
+  const unknown = await fetch(`${base}/api/sms/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider_message_id: 'DOES-NOT-EXIST', status: 'delivered' }),
+  });
+  assert.equal(unknown.status, 200);
+  assert.equal((await unknown.json()).updated, false);
+});
+
+await test('SMS: tenant opt-out suppresses new messages', async () => {
+  const tenantId = dbGet('SELECT id FROM users WHERE email = ?', ['sms.t@test.ke']).id;
+  const ts = session();
+  await ts.request('POST', '/api/auth/login', { email: 'sms.t@test.ke', password: 'Tenant@123' });
+  assert.equal((await ts.request('POST', '/api/sms/opt-out', { opt_out: true })).status, 200);
+
+  const lease = dbGet('SELECT * FROM leases WHERE tenant_id = ? ORDER BY id DESC LIMIT 1', [tenantId]);
+  const landlord = session();
+  await landlord.request('POST', '/api/auth/login', { email: 'sms.l@test.ke', password: 'Secret123' });
+  const before = dbGet('SELECT COUNT(*) AS c FROM sms_messages WHERE user_id = ?', [tenantId]).c;
+  const created = await landlord.request('POST', '/api/utility-bills', {
+    property_id: lease.property_id,
+    unit_id: lease.unit_id,
+    category: 'Water',
+    period: '2026-03',
+    amount: 300,
+  });
+  assert.equal(created.status, 201);
+  await tick();
+  const after = dbGet('SELECT COUNT(*) AS c FROM sms_messages WHERE user_id = ?', [tenantId]).c;
+  assert.equal(after, before, 'no SMS is queued for an opted-out tenant');
+});
+
+await test('public applications: anonymous submit returns a reference, blocks duplicates and supports lookup', async () => {
+  const landlord = session();
+  await register(landlord, { role: 'landlord', full_name: 'Public Landlord', email: 'pub.l@test.ke' });
+  const prop = (await (await landlord.request('POST', '/api/properties', { name: 'Public Court', county: 'Nairobi', property_type: 'Apartment' })).json()).property;
+  const payload = { full_name: 'Anon Applicant', email: 'anon@test.ke', phone: '0712000111', move_in_date: '2026-08-01' };
+  const apply = (body) =>
+    fetch(`${base}/api/market/properties/${prop.id}/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  const first = await apply(payload);
+  assert.equal(first.status, 201);
+  const body = await first.json();
+  assert.match(body.reference, /^APP-\d{6}$/);
+  assert.equal(dbGet('SELECT applicant_id FROM applications WHERE id = ?', [body.applicationId]).applicant_id, null, 'anonymous application creates no account');
+
+  assert.equal((await apply(payload)).status, 400, 'a duplicate anonymous application is rejected');
+
+  const statusRes = await fetch(`${base}/api/market/applications/status?reference=${body.reference}&email=anon@test.ke`);
+  assert.equal(statusRes.status, 200);
+  assert.equal((await statusRes.json()).status, 'pending');
+
+  const wrong = await fetch(`${base}/api/market/applications/status?reference=${body.reference}&email=nope@test.ke`);
+  assert.equal(wrong.status, 404, 'status lookup requires the matching email');
+});
+
+await test('tenant activation: landlord-created account activates via a single-use link', async () => {
+  const landlord = session();
+  await register(landlord, { role: 'landlord', full_name: 'Activation Landlord', email: 'act.l@test.ke' });
+  const prop = (await (await landlord.request('POST', '/api/properties', { name: 'Activation Court', county: 'Nairobi', property_type: 'Apartment' })).json()).property;
+  const unit = (await (await landlord.request('POST', '/api/units', { property_id: prop.id, unit_number: 'AC1', unit_type: '1 Bedroom', rent: 14000 })).json()).unit;
+
+  const created = await landlord.request('POST', '/api/tenants', {
+    full_name: 'Activation Tenant', email: 'act.t@test.ke', phone: '0722111333', unit_id: unit.id,
+    start_date: '2026-02-01', end_date: '2027-02-01',
+  });
+  assert.equal(created.status, 201);
+  const body = await created.json();
+  assert.ok(body.activation?.url, 'an activation link is returned to the landlord');
+  const token = new URL(body.activation.url).searchParams.get('token');
+
+  const pre = session();
+  assert.notEqual((await pre.request('POST', '/api/auth/login', { email: 'act.t@test.ke', password: 'whatever' })).status, 200, 'account cannot log in before activation');
+
+  const info = await (await fetch(`${base}/api/auth/activation/${token}`)).json();
+  assert.equal(info.valid, true);
+  assert.equal(info.email, 'act.t@test.ke');
+
+  const activate = await fetch(`${base}/api/auth/activation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password: 'NewPass123' }),
+  });
+  assert.equal(activate.status, 200);
+
+  const post = session();
+  assert.equal((await post.request('POST', '/api/auth/login', { email: 'act.t@test.ke', password: 'NewPass123' })).status, 200, 'activation sets a usable password');
+
+  const reuse = await fetch(`${base}/api/auth/activation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password: 'Other123' }),
+  });
+  assert.equal(reuse.status, 400, 'an activation link is single-use');
+
+  const resendExisting = await fetch(`${base}/api/auth/activation/resend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'act.t@test.ke' }),
+  });
+  const resendUnknown = await fetch(`${base}/api/auth/activation/resend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'nobody@test.ke' }),
+  });
+  assert.equal(resendExisting.status, 200);
+  assert.equal(resendUnknown.status, 200, 'resend never reveals whether an account exists');
+
+  const outsider = session();
+  await register(outsider, { role: 'landlord', full_name: 'Activation Outsider', email: 'act.out@test.ke' });
+  const tenantId = dbGet('SELECT id FROM users WHERE email = ?', ['act.t@test.ke']).id;
+  assert.equal((await outsider.request('POST', `/api/tenants/${tenantId}/activation`)).status, 404, 'a non-owning landlord cannot issue an activation link');
+});
+
 server.close();
 await new Promise((resolve) => server.on('close', resolve));try {
   fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -9,6 +9,8 @@ import { notFoundHandler, errorHandler } from './middleware/error.js';
 import { rateLimit, authRateLimits } from './middleware/rateLimit.js';
 
 import authRoutes from './routes/auth.js';
+import activationRoutes from './routes/activation.js';
+import smsRoutes from './routes/sms.js';
 import marketRoutes from './routes/market.js';
 import propertyRoutes from './routes/properties.js';
 import unitRoutes from './routes/units.js';
@@ -55,6 +57,7 @@ export function createApp() {
   const limits = authRateLimits(config);
   app.use('/api/auth/login', rateLimit(limits.login));
   app.use('/api/auth/register', rateLimit(limits.register));
+  app.use('/api/auth/activation', rateLimit(limits.activation));
   app.use('/api/payments/mpesa/callback', rateLimit(limits.callback));
   app.use('/api/payments/initiate', rateLimit(limits.initiate));
   app.use('/api/uploads', rateLimit(limits.upload));
@@ -63,8 +66,10 @@ export function createApp() {
     res.json({ ok: true, service: 'smart-rentals', time: new Date().toISOString() })
   );
 
+  app.use('/api/auth', activationRoutes);
   app.use('/api/auth', authRoutes);
   app.use('/api/market', marketRoutes);
+  app.use('/api/sms', smsRoutes);
   app.use('/api/properties', propertyRoutes);
   app.use('/api/units', unitRoutes);
   app.use('/api/tenants', tenantRoutes);
