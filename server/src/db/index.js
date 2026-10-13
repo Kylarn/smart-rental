@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone TEXT,
   password_hash TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')),
+  approval_status TEXT NOT NULL DEFAULT 'approved' CHECK (approval_status IN ('approved','pending','rejected')),
   avatar_url TEXT,
   county TEXT,
   id_number TEXT,
@@ -86,10 +87,12 @@ CREATE TABLE IF NOT EXISTS payments (
   method TEXT NOT NULL DEFAULT 'mpesa' CHECK (method IN ('mpesa','bank','cash','card')),
   provider TEXT NOT NULL DEFAULT 'mpesa',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','completed','failed','cancelled')),
+  utility_bill_id INTEGER REFERENCES utility_bills(id) ON DELETE SET NULL,
   phone TEXT,
   reference TEXT,
   receipt_number TEXT UNIQUE,
   provider_ref TEXT,
+  merchant_request_id TEXT,
   failure_reason TEXT,
   paid_at TEXT,
   recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -412,6 +415,7 @@ CREATE TABLE users__new (
   phone TEXT,
   password_hash TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')),
+  approval_status TEXT NOT NULL DEFAULT 'approved' CHECK (approval_status IN ('approved','pending','rejected')),
   avatar_url TEXT,
   county TEXT,
   id_number TEXT,
@@ -450,6 +454,20 @@ function ensureMigrations(database) {
   if (!userCols.includes('sms_opt_out')) {
     database.exec('ALTER TABLE users ADD COLUMN sms_opt_out INTEGER NOT NULL DEFAULT 0');
   }
+  if (!userCols.includes('approval_status')) {
+    database.exec("ALTER TABLE users ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'approved'");
+  }
+
+  const paymentCols = columnNames(database, 'payments');
+  if (paymentCols.length && !paymentCols.includes('utility_bill_id')) {
+    database.exec('ALTER TABLE payments ADD COLUMN utility_bill_id INTEGER REFERENCES utility_bills(id) ON DELETE SET NULL');
+  }
+  if (paymentCols.length && !paymentCols.includes('merchant_request_id')) {
+    database.exec('ALTER TABLE payments ADD COLUMN merchant_request_id TEXT');
+  }
+  try {
+    database.exec('CREATE INDEX IF NOT EXISTS idx_payments_utility_bill ON payments(utility_bill_id)');
+  } catch {}
 
   const unitCols = columnNames(database, 'units');
   if (!unitCols.includes('occupancy_known')) {

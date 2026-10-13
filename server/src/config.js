@@ -30,6 +30,8 @@ export const config = {
     apiKey: process.env.SMS_API_KEY || '',
     enabled: process.env.SMS_ENABLED !== '0',
     maxAttempts: Number(process.env.SMS_MAX_ATTEMPTS || 3),
+    webhookSecret: process.env.SMS_WEBHOOK_SECRET || '',
+    webhookToleranceSeconds: Number(process.env.SMS_WEBHOOK_TOLERANCE_SECONDS || 300),
   },
 };
 

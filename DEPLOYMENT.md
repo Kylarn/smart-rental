@@ -51,6 +51,7 @@ server/tests/backup.restore.mjs  backup/restore verification on a disposable DB
 server/scripts/backup.js    verified SQLite backup script
 deploy/                     STAGING.md runbook + systemd / nginx / Docker samples
 deploy/BROWSER-ACCEPTANCE.md  manual desktop+mobile browser checklist
+deploy/PRODUCTION-DATA.md   production Riesta register import + account activation runbook
 client/                 React app (Vite)
 ```
 
@@ -78,12 +79,15 @@ Environment variables can also be provided by the host/process manager.
 | `UPLOADS_DIR` | no | Upload directory. Default `<root>/uploads`. |
 | `BACKUP_DIR` | no | Backup output directory. Default `<root>/backups`. |
 | `MPESA_ENV` | for M-Pesa | `sandbox` or `production`. Required to be `production` for live payments. |
-| `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL` | for M-Pesa | Daraja credentials. Callback URL must be public HTTPS in production. |
+| `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL` | for M-Pesa | Daraja credentials. Callback URL must be public HTTPS in production and should be kept unguessable. |
+| `MPESA_CALLBACK_AMOUNT_TOLERANCE` | no | Allowed absolute difference (KES) between the callback amount and the expected amount (default `1`). |
 | `SMS_ENABLED` | no | `0` disables all outbound SMS. Default `1`. |
 | `SMS_PROVIDER` | for SMS | `mock` (default, logs only — no real texts), `http` (real gateway) or `disabled`. |
 | `SMS_SENDER_ID` | for SMS | Alphanumeric sender ID / short code shown to recipients. |
 | `SMS_API_URL`, `SMS_API_KEY` | for `http` provider | Gateway endpoint (POST JSON) and API key. Required for the `http` provider to be `ready`. |
 | `SMS_MAX_ATTEMPTS` | no | Retry ceiling for failed sends (default `3`). |
+| `SMS_WEBHOOK_SECRET` | for the SMS webhook | Shared secret for the HMAC-SHA256 signature on `POST /api/sms/webhook`. Without it the webhook rejects every callback (fails closed). |
+| `SMS_WEBHOOK_TOLERANCE_SECONDS` | no | Max age/clock skew accepted for a signed webhook timestamp (default `300`). |
 | `PUBLIC_BASE_URL` | recommended | Public URL used to build tenant activation links, e.g. `https://app.example.com`. Falls back to `CLIENT_ORIGIN` or `http://localhost:5173`. |
 | `ACTIVATION_TTL_HOURS` | no | Lifetime of a tenant activation link in hours (default `48`). |
 | `RATE_LIMIT_*` | no | Optional overrides for rate limits (see below). |
@@ -254,19 +258,35 @@ Payments use Daraja STK Push. Behaviour depends on configuration:
 Callback handling at `POST /api/payments/mpesa/callback`:
 
 - Public endpoint (no auth), rate-limited, **idempotent** (repeated callbacks do not double-complete).
-- On success (`ResultCode 0`) it stores the M-Pesa receipt and completes the payment; on failure
-  it marks the payment failed with the provider reason.
-- Unknown/unmatched callbacks are acknowledged (`ResultCode 0`) and ignored without side effects.
+- **Callbacks are never trusted on their own.** Daraja does not cryptographically sign STK Push
+  callbacks, so the callback is only a trigger: the server correlates `CheckoutRequestID` +
+  `MerchantRequestID` with a server-created pending payment, checks the amount, and then confirms
+  the real transaction status **server-to-server** with the Daraja STK Push Query API (signed with
+  our own OAuth token + passkey). Only a provider-confirmed success completes a payment.
+- Fail closed: unknown references, merchant-reference mismatches, amount mismatches, or a callback
+  whose status cannot be verified by the provider leave the payment unchanged (and unverified
+  failures do not mutate state). A callback for an already-final payment is ignored.
 - Stuck payments are recovered on startup and by the scheduler.
+
+### SMS delivery-status webhook
+
+`POST /api/sms/webhook` requires an HMAC-SHA256 signature (`X-SMS-Signature: sha256=<hex>`) keyed by
+`SMS_WEBHOOK_SECRET` over the raw request body (or `<X-SMS-Timestamp>.<body>` when a timestamp is
+sent). Unsigned/invalid/stale requests are rejected with `401`. The generic HTTP gateway provides no
+vendor signature, so this shared-secret contract is the supported mechanism; if the gateway cannot
+produce it, the webhook must be left disabled (it fails closed). Only messages already in our DB
+(via `provider_message_id`) can be updated, and `delivered`/`failed` are terminal.
 
 ### Sandbox testing status
 
 A real Daraja **sandbox round-trip could not be executed** because no Safaricom credentials were
 provided (`MPESA_*` are blank). The callback/STK logic is covered by automated tests
-(production guard, mock mode, callback idempotency/matching). To validate against real Safaricom:
+(production guard, mock mode, callback idempotency/matching, and callback verification with a
+provider double). To validate against real Safaricom:
 
 1. Set `MPESA_ENV=sandbox` and the sandbox key/secret/shortcode/passkey and a public HTTPS callback.
-2. Initiate a tenant payment and confirm the callback updates the payment to `completed`.
+2. Initiate a tenant payment, confirm the callback arrives and that the server-to-server STK Push
+   Query returns `ResultCode 0` before the payment flips to `completed`.
 3. Only after success, switch to production credentials with `MPESA_ENV=production`.
 4. Restrict/allow the callback URL to Safaricom's IP ranges at the proxy, and keep the URL secret.
 

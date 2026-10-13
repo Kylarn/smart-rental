@@ -21,11 +21,15 @@ router.get(
       where.push('status = ?');
       params.push(req.query.status);
     }
+    if (req.query.approval_status) {
+      where.push('approval_status = ?');
+      params.push(req.query.approval_status);
+    }
     if (req.query.search) {
       where.push('(full_name LIKE ? OR email LIKE ? OR phone LIKE ?)');
       params.push(`%${req.query.search}%`, `%${req.query.search}%`, `%${req.query.search}%`);
     }
-    let sql = `SELECT id, role, full_name, email, phone, status, avatar_url, county, created_at FROM users`;
+    let sql = `SELECT id, role, full_name, email, phone, status, approval_status, avatar_url, county, created_at FROM users`;
     if (where.length) sql += ` WHERE ${where.join(' AND ')}`;
     sql += ' ORDER BY created_at DESC LIMIT 500';
     const users = all(sql, params).map((u) => ({
@@ -78,6 +82,10 @@ router.patch(
       if (id === req.user.id) throw badRequest('You cannot change your own role');
       updates.role = req.body.role;
     }
+    if (req.body.approval_status !== undefined) {
+      if (!['approved', 'pending', 'rejected'].includes(req.body.approval_status)) throw badRequest('Invalid approval status');
+      updates.approval_status = req.body.approval_status;
+    }
     if (req.body.full_name) updates.full_name = String(req.body.full_name).trim();
     if (req.body.county !== undefined) updates.county = req.body.county;
     if (req.body.password) updates.password_hash = await bcrypt.hash(String(req.body.password), 10);
@@ -95,7 +103,22 @@ router.patch(
           body: 'Your account has been suspended. Contact support for assistance.',
         });
       }
-      audit(req, 'admin.user_updated', 'user', id, { fields: keys, status: updates.status, role: updates.role });
+      if (updates.approval_status === 'approved') {
+        notify(id, {
+          type: 'success',
+          title: 'Account approved',
+          body: 'Your landlord account has been approved. You can now sign in and list properties.',
+          link: '/login',
+        });
+      }
+      if (updates.approval_status === 'rejected') {
+        notify(id, {
+          type: 'error',
+          title: 'Account not approved',
+          body: 'Your landlord account application was not approved. Contact support for assistance.',
+        });
+      }
+      audit(req, 'admin.user_updated', 'user', id, { fields: keys, status: updates.status, role: updates.role, approval_status: updates.approval_status });
     }
     res.json({ ok: true });
   })
@@ -156,6 +179,7 @@ router.get(
         support_phone: '',
         currency: 'KES',
         registration_enabled: 'true',
+        landlord_approval: 'true',
         mpesa_mode: 'sandbox',
         sms_enabled: 'true',
         ...settings,
@@ -173,6 +197,7 @@ router.put(
       'support_phone',
       'currency',
       'registration_enabled',
+      'landlord_approval',
       'mpesa_mode',
       'sms_enabled',
       'sms_provider',

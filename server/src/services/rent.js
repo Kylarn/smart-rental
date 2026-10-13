@@ -223,7 +223,7 @@ export function landlordStats(landlordId) {
   const monthStart = `${new Date().getFullYear()}-${pad(new Date().getMonth() + 1)}-01`;
   const collected = get(
     `SELECT COALESCE(SUM(amount), 0) AS total FROM payments
-     WHERE property_id IN (${ph}) AND status = 'completed' AND paid_at >= ?`,
+     WHERE property_id IN (${ph}) AND status = 'completed' AND utility_bill_id IS NULL AND paid_at >= ?`,
     [...ids, monthStart]
   );
   const leases = all(`SELECT * FROM leases WHERE property_id IN (${ph}) AND status = 'active'`, ids);
@@ -267,10 +267,10 @@ export function tenantStats(tenantId) {
   const now = new Date();
   const monthStart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
   const paid = get(
-    `SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE tenant_id = ? AND status = 'completed' AND paid_at >= ?`,
+    `SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE tenant_id = ? AND status = 'completed' AND utility_bill_id IS NULL AND paid_at >= ?`,
     [tenantId, monthStart]
   );
-  const totalPaid = get(`SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE tenant_id = ? AND status = 'completed'`, [
+  const totalPaid = get(`SELECT COALESCE(SUM(amount),0) AS total FROM payments WHERE tenant_id = ? AND status = 'completed' AND utility_bill_id IS NULL`, [
     tenantId,
   ]);
   const dueDay = Number(lease.start_date?.slice(8, 10) || 1);
@@ -315,7 +315,7 @@ export function paymentTrend(landlordIds, months = 6) {
   const rows = all(
     `SELECT strftime('%Y-%m', paid_at) AS ym, COALESCE(SUM(amount),0) AS total
      FROM payments
-     WHERE status = 'completed' AND property_id IN (${placeholders(landlordIds)})
+     WHERE status = 'completed' AND utility_bill_id IS NULL AND property_id IN (${placeholders(landlordIds)})
      GROUP BY ym ORDER BY ym`,
     landlordIds
   );

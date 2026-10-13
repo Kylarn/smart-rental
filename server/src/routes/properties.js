@@ -42,6 +42,9 @@ router.get(
     } else if (req.user.role === 'caretaker') {
       where.push('p.id IN (SELECT property_id FROM property_caretakers WHERE caretaker_id = ?)');
       params.push(req.user.id);
+    } else if (req.user.role === 'tenant') {
+      where.push('p.id IN (SELECT property_id FROM leases WHERE tenant_id = ?)');
+      params.push(req.user.id);
     }
     if (status) {
       where.push('p.status = ?');
@@ -69,6 +72,9 @@ router.post(
   '/',
   requireRole('landlord', 'admin'),
   asyncHandler(async (req, res) => {
+    if (req.user.role === 'landlord' && req.user.approval_status !== 'approved') {
+      throw forbidden('Your account is awaiting admin approval before you can list properties.');
+    }
     validate(req.body, {
       name: { required: true, label: 'Property name', minLength: 3 },
       county: { required: true, label: 'County' },

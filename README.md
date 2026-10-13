@@ -29,7 +29,7 @@ server/src/db/         schema (index.js), Riesta seed + importer (riesta.js), db
 server/tests/          api.test.js (60), smoke.mjs (19), backup.restore.mjs (5) suites
 client/src/            React SPA (pages, components, lib)
 server/scripts/        backup.js, import-riesta.mjs
-deploy/                Dockerfile, compose, nginx, systemd unit, staging & verification docs
+deploy/                Dockerfile, compose, nginx, systemd unit, staging, production-data & verification docs
 ```
 
 ## Quick start (development)
@@ -115,8 +115,8 @@ See `.env.example` for every variable. Key ones:
 - `PORT`, `DB_PATH`, `UPLOADS_DIR`, `BACKUP_DIR` — runtime locations; change `DB_PATH` to keep the real data db separate from staging/seed.
 - `JWT_SECRET` — required in production (min 32 chars).
 - `COOKIE_SECURE=1` — required in production for HTTPS cookies.
-- **M-Pesa:** `MPESA_ENV=sandbox` (or `production`), plus `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL` (public HTTPS). In development, leaving the credentials blank enables a mock/money-free mode; in production mock mode is refused.
-- **SMS:** `SMS_PROVIDER=mock` (default; logs only, marked simulated), `http` (real gateway — also set `SMS_API_URL`, `SMS_API_KEY`, `SMS_SENDER_ID`), or `disabled`. `SMS_ENABLED=0` turns texts off entirely. Set `PUBLIC_BASE_URL` so tenant activation links are absolute; `ACTIVATION_TTL_HOURS` controls their lifetime (default 48).
+- **M-Pesa:** `MPESA_ENV=sandbox` (or `production`), plus `MPESA_CONSUMER_KEY`, `MPESA_CONSUMER_SECRET`, `MPESA_SHORTCODE`, `MPESA_PASSKEY`, `MPESA_CALLBACK_URL` (public HTTPS). In development, leaving the credentials blank enables a mock/money-free mode; in production mock mode is refused. Daraja does not sign STK callbacks, so `POST /api/payments/mpesa/callback` never completes a payment from the callback body alone — it correlates to a server-created payment and confirms status server-to-server via the STK Push Query API. Keep the callback URL unguessable.
+- **SMS:** `SMS_PROVIDER=mock` (default; logs only, marked simulated), `http` (real gateway — also set `SMS_API_URL`, `SMS_API_KEY`, `SMS_SENDER_ID`), or `disabled`. Set `SMS_WEBHOOK_SECRET` to enable the signed delivery-status webhook (`POST /api/sms/webhook`); without it the endpoint rejects every callback. `SMS_ENABLED=0` turns texts off entirely. Set `PUBLIC_BASE_URL` so tenant activation links are absolute; `ACTIVATION_TTL_HOURS` controls their lifetime (default 48).
 
 ## Tests
 
@@ -137,6 +137,7 @@ npm run build         # client production build (Vite)
 - `deploy/STAGING.md` — running the local staging instance and admin login
 - `deploy/WORKFLOW-VERIFICATION.md` — workflow-by-workflow verification results, defects fixed, known blockers
 - `deploy/BROWSER-ACCEPTANCE.md` — manual browser sign-off checklist
+- `deploy/PRODUCTION-DATA.md` — production Riesta register import + owner/caretaker/tenant account activation
 - `docs/ROLE-GUIDE.md` — how the system works per role with the exact flows
 
 ## Security notes

@@ -13,10 +13,17 @@ router.post(
   '/mpesa/callback',
   asyncHandler(async (req, res) => {
     const mpesa = (await import('../services/payments/mpesa.js')).default;
-    const result = mpesa.handleCallback(req.body);
+    let result;
+    try {
+      result = await mpesa.handleCallback(req.body);
+    } catch (err) {
+      // Never leak provider/internal detail to the caller; fail closed.
+      console.warn('[mpesa:callback] handler error', { message: String(err.message || err).slice(0, 160) });
+      result = { accepted: false, status: 'error' };
+    }
     res.json({
       ResultCode: 0,
-      ResultDesc: result ? 'Accepted' : 'Ignored',
+      ResultDesc: result?.accepted ? 'Accepted' : 'Ignored',
     });
   })
 );
@@ -64,7 +71,7 @@ router.get(
   '/',
   asyncHandler(async (req, res) => {
     const params = [];
-    const where = [];
+    const where = ['pay.utility_bill_id IS NULL'];
     if (req.user.role === 'tenant') {
       where.push('pay.tenant_id = ?');
       params.push(req.user.id);
@@ -216,7 +223,11 @@ router.post(
       throw badRequest(err.message);
     }
 
-    run('UPDATE payments SET provider_ref = ? WHERE id = ?', [push.checkoutRequestId, paymentId]);
+    run('UPDATE payments SET provider_ref = ?, merchant_request_id = ? WHERE id = ?', [
+      push.checkoutRequestId,
+      push.merchantRequestId || null,
+      paymentId,
+    ]);
     audit(req, 'payment.initiated', 'payment', paymentId, { amount, phone, provider: 'mpesa' }, { property_id: lease.property_id });
 
     res.status(201).json({

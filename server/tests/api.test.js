@@ -11,11 +11,31 @@ process.env.DB_PATH = path.join(tmpDir, 'test.db');
 process.env.JWT_SECRET = 'test-secret-not-for-production';
 process.env.NODE_ENV = 'test';
 process.env.UPLOADS_DIR = path.join(tmpDir, 'uploads');
+process.env.SMS_WEBHOOK_SECRET = 'test-sms-webhook-secret';
 
 const { createApp } = await import('../src/app.js');
 const { openDb, get: dbGet } = await import('../src/db/index.js');
 const { validateEnvConfig } = await import('../src/utils/configGuard.js');
+const mpesaModule = await import('../src/services/payments/mpesa.js');
+const crypto = await import('node:crypto');
+
+// The real STK Push Query requires live Daraja credentials, which the test suite
+// must never use. This deterministic double simulates the provider's
+// server-to-server verdict so callback verification can be exercised end to end.
+// Genuine provider verification (real OAuth + STK Query) is NOT covered here.
+mpesaModule.setCallbackVerifier(async (checkoutRequestId) => {
+  const ref = String(checkoutRequestId);
+  if (ref.startsWith('UNVERIFIED')) {
+    return { verified: false, definitiveFailure: false, code: null, reason: 'simulated: provider query unavailable' };
+  }
+  if (ref.startsWith('DECLINED')) {
+    return { verified: false, definitiveFailure: true, code: '1032', reason: 'Request cancelled by user' };
+  }
+  return { verified: true, definitiveFailure: false, code: '0', reason: 'simulated: provider confirmed success' };
+});
+
 const app = createApp();
+dbGet("INSERT OR REPLACE INTO settings (key, value) VALUES ('landlord_approval', 'false')");
 const server = app.listen(0);
 const { port } = server.address();
 const base = `http://127.0.0.1:${port}`;
@@ -1634,6 +1654,41 @@ await test('admin routes are admin-only and settings updates persist', async () 
   assert.equal((await c2.request('POST', '/api/auth/login', { email: 'ao.caretaker@test.ke', password: 'Caretaker@123' })).status, 200, 'an admin-created caretaker can log in');
 });
 
+await test('landlord signups await admin approval when landlord_approval is on', async () => {
+  const bcryptMod = (await import('bcryptjs')).default;
+  const db = new DatabaseSync(process.env.DB_PATH);
+  db.prepare("INSERT INTO users (role, full_name, email, phone, password_hash, status) VALUES ('admin', 'Approve Admin', 'approve.admin@test.ke', '0710000001', ?, 'active')").run(
+    await bcryptMod.hash('Admin@123', 10)
+  );
+  const admin = session();
+  assert.equal((await admin.request('POST', '/api/auth/login', { email: 'approve.admin@test.ke', password: 'Admin@123' })).status, 200);
+  assert.equal((await admin.request('PUT', '/api/admin/settings', { landlord_approval: 'true' })).status, 200, 'admin can enable landlord approval');
+
+  const signup = session();
+  const res = await register(signup, { role: 'landlord', full_name: 'Pending Landlord', email: 'pending.l@test.ke' });
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.equal(body.pending, true, 'signup is queued for approval');
+  assert.equal(body.user.approval_status, 'pending');
+  assert.equal(signup.cookie(), '', 'no session cookie is issued while pending');
+
+  assert.equal((await signup.request('GET', '/api/properties')).status, 401, 'pending landlords cannot use the API');
+  const blocked = await signup.request('POST', '/api/auth/login', { email: 'pending.l@test.ke', password: 'Secret123' });
+  assert.equal(blocked.status, 403, 'pending landlords cannot log in');
+
+  const listed = await (await admin.request('GET', '/api/admin/users?role=landlord&approval_status=pending')).json();
+  const pending = listed.users.find((u) => u.email === 'pending.l@test.ke');
+  assert.ok(pending, 'pending landlord appears in the admin queue');
+  assert.equal((await admin.request('PATCH', `/api/admin/users/${pending.id}`, { approval_status: 'approved' })).status, 200);
+
+  const after = session();
+  assert.equal((await after.request('POST', '/api/auth/login', { email: 'pending.l@test.ke', password: 'Secret123' })).status, 200, 'approved landlord can log in');
+  const created = await after.request('POST', '/api/properties', { name: 'Approved Estates', county: 'Nairobi', property_type: 'Apartment' });
+  assert.equal(created.status, 201, 'approved landlord can list properties');
+
+  await admin.request('PUT', '/api/admin/settings', { landlord_approval: 'false' });
+});
+
 await test('CSV exports respect role scope and never leak across landlords', async () => {
   const l1 = session();
   await register(l1, { role: 'landlord', full_name: 'CSV L1', email: 'csv1.l@test.ke' });
@@ -1913,7 +1968,117 @@ await test('utility bills: caretaker only manages assigned properties', async ()
   );
 });
 
+await test('utility bills: tenant pays via M-Pesa STK and the bill is settled', async () => {
+  const period = ymOff(0);
+  const { landlord, prop, unit } = await acctScenario({
+    landlordEmail: 'ubpay.l@test.ke',
+    tenantEmail: 'ubpay.t@test.ke',
+    rent: 10000,
+    start: '2026-01-05',
+    end: '2027-01-05',
+    unitNo: 'UBP',
+  });
+  const created = await landlord.request('POST', '/api/utility-bills', {
+    property_id: prop.id,
+    unit_id: unit.id,
+    category: 'Water',
+    period,
+    amount: 750,
+  });
+  const bill = (await created.json()).bill;
+
+  const t = session();
+  await t.request('POST', '/api/auth/login', { email: 'ubpay.t@test.ke', password: 'Tenant@123' });
+
+  const other = session();
+  await register(other, { role: 'tenant', full_name: 'Other UBP', email: 'ubpay.other@test.ke' });
+  assert.equal(
+    (await other.request('POST', `/api/utility-bills/${bill.id}/pay-mpesa`, { phone: '0712345678' })).status,
+    403,
+    'a tenant cannot pay another tenant bill'
+  );
+  assert.equal(
+    (await t.request('POST', `/api/utility-bills/${bill.id}/pay-mpesa`, { phone: '123' })).status,
+    400,
+    'an invalid M-Pesa number is rejected'
+  );
+
+  const init = await t.request('POST', `/api/utility-bills/${bill.id}/pay-mpesa`, { phone: '0712345678' });
+  assert.equal(init.status, 201);
+  const body = await init.json();
+  assert.ok(body.checkout_request_id, 'a checkout request id is returned');
+
+  const row = dbGet('SELECT status, lease_id, utility_bill_id FROM payments WHERE id = ?', [body.payment_id]);
+  assert.equal(row.status, 'processing', 'the payment starts as processing');
+  assert.equal(row.utility_bill_id, bill.id, 'the payment is linked to the bill');
+  assert.equal(row.lease_id, null, 'utility payments are not attached to the lease ledger');
+
+  assert.equal(
+    (await t.request('POST', `/api/utility-bills/${bill.id}/pay-mpesa`, { phone: '0712345678' })).status,
+    409,
+    'a second in-flight payment for the same bill is blocked'
+  );
+
+  const cb = await fetch(`${base}/api/payments/mpesa/callback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      Body: {
+        stkCallback: {
+          CheckoutRequestID: body.checkout_request_id,
+          ResultCode: 0,
+          ResultDesc: 'Successful',
+          CallbackMetadata: {
+            Items: [
+              { Name: 'Amount', Value: 750 },
+              { Name: 'MpesaReceiptNumber', Value: 'UBPAY123XYZ' },
+            ],
+          },
+        },
+      },
+    }),
+  });
+  assert.equal((await cb.json()).ResultDesc, 'Accepted');
+
+  const settled = dbGet('SELECT status, receipt_number FROM payments WHERE id = ?', [body.payment_id]);
+  assert.equal(settled.status, 'completed', 'a successful callback completes the STK payment');
+  assert.ok(settled.receipt_number, 'it is settled with a receipt number');
+
+  const billRow = dbGet('SELECT status, payment_method, paid_at FROM utility_bills WHERE id = ?', [bill.id]);
+  assert.equal(billRow.status, 'paid', 'the linked bill is marked paid once the STK completes');
+  assert.equal(billRow.payment_method, 'mpesa');
+  assert.ok(billRow.paid_at, 'paid_at is stamped on the bill');
+
+  const list = await (await t.request('GET', '/api/utility-bills')).json();
+  assert.equal(list.stats.unpaid, 0, 'the tenant unpaid total drops to zero');
+  assert.equal(list.stats.paid, 750, 'the paid total reflects the settlement');
+
+  const ledger = await (await t.request('GET', '/api/payments')).json();
+  assert.equal(
+    ledger.payments.some((p) => p.utility_bill_id === bill.id),
+    false,
+    'utility payments stay out of the rent ledger'
+  );
+});
+
 const tick = (ms = 80) => new Promise((r) => setTimeout(r, ms));
+
+// Builds a signed delivery-status webhook request. Mirrors the HMAC-SHA256
+// contract in server/src/services/sms/webhookAuth.js.
+function smsWebhookInit(payload, { timestamp, signature, omitSignature = false } = {}) {
+  const body = JSON.stringify(payload);
+  const headers = { 'Content-Type': 'application/json' };
+  let message = body;
+  if (timestamp !== undefined) {
+    headers['X-SMS-Timestamp'] = String(timestamp);
+    message = `${timestamp}.${body}`;
+  }
+  if (!omitSignature) {
+    const sig = signature ?? crypto.createHmac('sha256', process.env.SMS_WEBHOOK_SECRET).update(message).digest('hex');
+    headers['X-SMS-Signature'] = String(sig).startsWith('sha256=') ? String(sig) : `sha256=${sig}`;
+  }
+  return { method: 'POST', headers, body };
+}
 
 await test('SMS: completed payments queue a mock message and history is role-scoped', async () => {
   const landlord = session();
@@ -1950,25 +2115,47 @@ await test('SMS: completed payments queue a mock message and history is role-sco
   assert.ok(llList.messages.some((m) => m.user_id === tenant.tenant_id), 'the owning landlord sees property SMS');
 });
 
-await test('SMS: delivery webhook updates status and ignores unknown ids', async () => {
+await test('SMS: delivery webhook updates status, is idempotent and ignores unknown ids', async () => {
   const row = dbGet("SELECT * FROM sms_messages WHERE status = 'sent' AND provider_message_id IS NOT NULL ORDER BY id DESC LIMIT 1");
   assert.ok(row, 'a sent message with a provider id exists');
-  const res = await fetch(`${base}/api/sms/webhook`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider_message_id: row.provider_message_id, status: 'delivered' }),
-  });
+  const res = await fetch(`${base}/api/sms/webhook`, smsWebhookInit({ provider_message_id: row.provider_message_id, status: 'delivered' }));
   assert.equal(res.status, 200);
   assert.equal((await res.json()).updated, true);
+  const delivered = dbGet('SELECT status, delivered_at FROM sms_messages WHERE id = ?', [row.id]);
+  assert.equal(delivered.status, 'delivered');
+  assert.ok(delivered.delivered_at, 'delivered_at is stamped');
+
+  const duplicate = await fetch(`${base}/api/sms/webhook`, smsWebhookInit({ provider_message_id: row.provider_message_id, status: 'failed' }));
+  assert.equal(duplicate.status, 200);
+  assert.equal((await duplicate.json()).updated, false, 'a later webhook cannot overwrite a final state');
   assert.equal(dbGet('SELECT status FROM sms_messages WHERE id = ?', [row.id]).status, 'delivered');
 
-  const unknown = await fetch(`${base}/api/sms/webhook`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider_message_id: 'DOES-NOT-EXIST', status: 'delivered' }),
-  });
+  const unknown = await fetch(`${base}/api/sms/webhook`, smsWebhookInit({ provider_message_id: 'DOES-NOT-EXIST', status: 'delivered' }));
   assert.equal(unknown.status, 200);
   assert.equal((await unknown.json()).updated, false);
+});
+
+await test('SMS: delivery webhook rejects unsigned, invalidly signed, replayed and bad-status requests', async () => {
+  const row = dbGet("SELECT * FROM sms_messages WHERE status = 'sent' AND provider_message_id IS NOT NULL ORDER BY id DESC LIMIT 1");
+  assert.ok(row, 'a sent message with a provider id exists');
+  const before = dbGet('SELECT status FROM sms_messages WHERE id = ?', [row.id]).status;
+
+  const unsigned = await fetch(`${base}/api/sms/webhook`, smsWebhookInit({ provider_message_id: row.provider_message_id, status: 'delivered' }, { omitSignature: true }));
+  assert.equal(unsigned.status, 401, 'a missing signature is rejected');
+
+  const badSig = await fetch(`${base}/api/sms/webhook`, smsWebhookInit({ provider_message_id: row.provider_message_id, status: 'delivered' }, { signature: 'ab'.repeat(32) }));
+  assert.equal(badSig.status, 401, 'an invalid signature is rejected');
+
+  const malformed = await fetch(`${base}/api/sms/webhook`, smsWebhookInit({ provider_message_id: row.provider_message_id, status: 'delivered' }, { signature: 'not-a-signature' }));
+  assert.equal(malformed.status, 401, 'a malformed signature is rejected');
+
+  const stale = await fetch(`${base}/api/sms/webhook`, smsWebhookInit({ provider_message_id: row.provider_message_id, status: 'delivered' }, { timestamp: Math.floor(Date.now() / 1000) - 3600 }));
+  assert.equal(stale.status, 401, 'a stale timestamp is rejected');
+
+  const badStatus = await fetch(`${base}/api/sms/webhook`, smsWebhookInit({ provider_message_id: row.provider_message_id, status: 'queued' }));
+  assert.equal(badStatus.status, 400, 'an invalid status value is rejected');
+
+  assert.equal(dbGet('SELECT status FROM sms_messages WHERE id = ?', [row.id]).status, before, 'rejected webhooks never change a record');
 });
 
 await test('SMS: tenant opt-out suppresses new messages', async () => {
@@ -2078,6 +2265,225 @@ await test('tenant activation: landlord-created account activates via a single-u
   await register(outsider, { role: 'landlord', full_name: 'Activation Outsider', email: 'act.out@test.ke' });
   const tenantId = dbGet('SELECT id FROM users WHERE email = ?', ['act.t@test.ke']).id;
   assert.equal((await outsider.request('POST', `/api/tenants/${tenantId}/activation`)).status, 404, 'a non-owning landlord cannot issue an activation link');
+});
+
+async function makeLandlord(email) {
+  const s = session();
+  await register(s, { role: 'landlord', full_name: 'Regression Landlord', email });
+  return s;
+}
+
+async function makeProperty(landlord, name, county = 'Nairobi') {
+  const res = await landlord.request('POST', '/api/properties', { name, county, property_type: 'Apartment' });
+  assert.equal(res.status, 201, `property "${name}" created`);
+  return (await res.json()).property;
+}
+
+async function makeUnit(landlord, propertyId, overrides = {}) {
+  const res = await landlord.request('POST', '/api/units', {
+    property_id: propertyId,
+    unit_number: 'U1',
+    unit_type: '1 Bedroom',
+    rent: 15000,
+    ...overrides,
+  });
+  assert.equal(res.status, 201, 'unit created');
+  return (await res.json()).unit;
+}
+
+await test('H1: tenant property list is scoped to their own leased properties', async () => {
+  const landlord = await makeLandlord('h1.l@test.ke');
+  const propA = await makeProperty(landlord, 'H1 Allowed Court');
+  const propB = await makeProperty(landlord, 'H1 Forbidden Court');
+  const unitA = await makeUnit(landlord, propA.id, { unit_number: 'H1-1' });
+
+  const tenant = session();
+  await register(tenant, { role: 'tenant', full_name: 'H1 Tenant', email: 'h1.t@test.ke' });
+
+  const before = await tenant.request('GET', '/api/properties');
+  assert.equal(before.status, 200);
+  assert.deepEqual((await before.json()).properties, [], 'a tenant with no lease sees no properties');
+
+  const lease = await landlord.request('POST', '/api/leases', {
+    unit_id: unitA.id,
+    start_date: '2026-03-01',
+    end_date: '2027-03-01',
+    tenant_name: 'H1 Tenant',
+    tenant_email: 'h1.t@test.ke',
+    tenant_phone: '0722333444',
+  });
+  assert.equal(lease.status, 201);
+
+  const after = await tenant.request('GET', '/api/properties');
+  assert.equal(after.status, 200);
+  const ids = (await after.json()).properties.map((p) => p.id);
+  assert.ok(ids.includes(propA.id), 'tenant sees the property they lease');
+  assert.ok(!ids.includes(propB.id), 'tenant does not see another landlord/property');
+});
+
+await test('M1: public property details hide landlord email and expose only vacant units', async () => {
+  const landlord = await makeLandlord('m1.l@test.ke');
+  const prop = await makeProperty(landlord, 'M1 Public Court');
+  await makeUnit(landlord, prop.id, { unit_number: 'V1' });
+  const occupied = await makeUnit(landlord, prop.id, { unit_number: 'O1', unit_type: '2 Bedroom' });
+  await landlord.request('POST', '/api/leases', {
+    unit_id: occupied.id,
+    start_date: '2026-03-01',
+    end_date: '2027-03-01',
+    tenant_name: 'M1 Occupant',
+    tenant_email: 'm1.occ@test.ke',
+    tenant_phone: '0722555666',
+  });
+
+  const res = await fetch(`${base}/api/market/properties/${prop.id}`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.landlord.email, undefined, 'no landlord email in public payload');
+  assert.equal(body.property.landlord_email, undefined, 'no landlord email on the property object');
+  assert.ok(body.landlord.phone, 'landlord phone remains so prospects can make contact');
+
+  const numbers = body.units.map((u) => u.unit_number);
+  assert.ok(numbers.includes('V1'), 'vacant unit is listed');
+  assert.ok(!numbers.includes('O1'), 'occupied unit is hidden from the public');
+  assert.ok(body.units.every((u) => u.status === 'vacant'));
+  assert.ok(
+    body.units.every((u) => !('property_id' in u) && !('occupancy_known' in u) && !('created_at' in u) && !('updated_at' in u)),
+    'internal unit fields are not exposed'
+  );
+});
+
+await test('M2: anonymous contact/viewing never create accounts and tolerate repeats', async () => {
+  const landlord = await makeLandlord('m2.l@test.ke');
+  const prop = await makeProperty(landlord, 'M2 Enquiry Court');
+  const landlordId = dbGet('SELECT id FROM users WHERE email = ?', ['m2.l@test.ke']).id;
+  const usersBefore = dbGet('SELECT COUNT(*) AS c FROM users').c;
+  const notesBefore = dbGet('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ?', [landlordId]).c;
+
+  const contact = { name: 'Anon Enquirer', email: 'anon.enq@test.ke', phone: '0712340000', message: 'I am interested in this property please.' };
+  const send = (path, payload) =>
+    fetch(`${base}/api/market/properties/${prop.id}/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+  assert.equal((await send('contact', contact)).status, 201);
+  assert.equal((await send('contact', contact)).status, 201, 'a repeated enquiry does not error');
+
+  const badEmail = await send('contact', { ...contact, email: 'not-an-email' });
+  assert.equal(badEmail.status, 400, 'an invalid enquiry email is rejected');
+
+  const viewing = { name: 'Anon Viewer', phone: '0712341111', viewing_date: '2026-08-01', message: 'Would love a viewing.' };
+  assert.equal((await send('viewing', viewing)).status, 201);
+  assert.equal((await send('viewing', viewing)).status, 201, 'a repeated viewing request does not error');
+
+  assert.equal(dbGet('SELECT COUNT(*) AS c FROM users').c, usersBefore, 'no accounts created from anonymous enquiries');
+  assert.equal(dbGet('SELECT COUNT(*) AS c FROM users WHERE email = ?', ['anon.enq@test.ke']).c, 0, 'no account from the enquiry email');
+  assert.ok(
+    dbGet('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ?', [landlordId]).c > notesBefore,
+    'the landlord is still notified'
+  );
+});
+
+await test('M3: unverified, unknown and mismatched M-Pesa callbacks cannot complete a payment', async () => {
+  const { tenant, prop, unit } = await acctScenario({
+    landlordEmail: 'm3.l@test.ke',
+    tenantEmail: 'm3.t@test.ke',
+    rent: 20000,
+    start: '2026-01-05',
+    end: '2027-01-05',
+    unitNo: 'M3',
+  });
+  const db = new DatabaseSync(process.env.DB_PATH);
+  const insPay = (status, amount, ref, merchant = null) =>
+    db
+      .prepare(
+        `INSERT INTO payments (tenant_id, property_id, unit_id, lease_id, amount, period, months_covered, method, provider, status, provider_ref, merchant_request_id, phone)
+         VALUES (?, ?, ?, ?, ?, ?, 1, 'mpesa', 'mpesa', ?, ?, ?, '0712345678')`
+      )
+      .run(tenant.tenant_id, prop.id, unit.id, tenant.lease_id, amount, '2026-02-01', status, ref, merchant);
+  const cb = (ref, { code = 0, amount, receipt = 'M3RCPT', merchant } = {}) => ({
+    Body: {
+      stkCallback: {
+        CheckoutRequestID: ref,
+        MerchantRequestID: merchant,
+        ResultCode: code,
+        ResultDesc: code === 0 ? 'Successful' : 'Request cancelled by user',
+        CallbackMetadata: {
+          Items: [
+            ...(amount == null ? [] : [{ Name: 'Amount', Value: amount }]),
+            ...(receipt ? [{ Name: 'MpesaReceiptNumber', Value: receipt }] : []),
+          ],
+        },
+      },
+    },
+  });
+  const post = (payload) =>
+    fetch(`${base}/api/payments/mpesa/callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+  const unverifiedId = insPay('processing', 20000, 'UNVERIFIED-M3').lastInsertRowid;
+  let res = await post(cb('UNVERIFIED-M3', { amount: 20000 }));
+  assert.equal((await res.json()).ResultDesc, 'Ignored');
+  assert.equal(dbGet('SELECT status FROM payments WHERE id = ?', [unverifiedId]).status, 'processing', 'unverified callback cannot complete');
+
+  const paymentsBefore = dbGet('SELECT COUNT(*) AS c FROM payments').c;
+  res = await post(cb('NEVER-ISSUED-REF', { amount: 20000 }));
+  assert.equal((await res.json()).ResultDesc, 'Ignored');
+  assert.equal(dbGet('SELECT COUNT(*) AS c FROM payments').c, paymentsBefore, 'unknown checkout reference creates nothing');
+
+  const mismatchId = insPay('processing', 20000, 'M3-MISMATCH').lastInsertRowid;
+  res = await post(cb('M3-MISMATCH', { amount: 1000 }));
+  assert.equal((await res.json()).ResultDesc, 'Accepted');
+  const mismatch = dbGet('SELECT status, failure_reason FROM payments WHERE id = ?', [mismatchId]);
+  assert.notEqual(mismatch.status, 'completed', 'an amount mismatch cannot complete');
+  assert.equal(mismatch.status, 'failed');
+  assert.match(mismatch.failure_reason, /amount does not match/i);
+
+  const declinedId = insPay('processing', 20000, 'DECLINED-M3').lastInsertRowid;
+  res = await post(cb('DECLINED-M3', { code: 1032, amount: 20000 }));
+  assert.equal((await res.json()).ResultDesc, 'Accepted');
+  const declined = dbGet('SELECT status FROM payments WHERE id = ?', [declinedId]);
+  assert.equal(declined.status, 'failed', 'a provider-confirmed failure is recorded, not completed');
+
+  const merchantId = insPay('processing', 20000, 'M3-MERCHANT', 'MERCHANT-EXPECTED').lastInsertRowid;
+  res = await post(cb('M3-MERCHANT', { amount: 20000, merchant: 'MERCHANT-ATTACKER' }));
+  assert.equal((await res.json()).ResultDesc, 'Ignored');
+  assert.equal(dbGet('SELECT status FROM payments WHERE id = ?', [merchantId]).status, 'processing', 'a merchant reference mismatch cannot complete');
+
+  const okId = insPay('processing', 20000, 'M3-OK').lastInsertRowid;
+  res = await post(cb('M3-OK', { amount: 20000, receipt: 'M3RECEIPT1' }));
+  assert.equal((await res.json()).ResultDesc, 'Accepted');
+  const ok = dbGet('SELECT status, receipt_number, reference FROM payments WHERE id = ?', [okId]);
+  assert.equal(ok.status, 'completed', 'a verified payment completes');
+  assert.ok(ok.receipt_number, 'it gets a receipt number');
+  assert.equal(ok.reference, 'M3RECEIPT1', 'the provider receipt is stored');
+
+  const notesBefore = dbGet('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ?', [tenant.tenant_id]).c;
+  res = await post(cb('M3-OK', { amount: 20000, receipt: 'M3RECEIPT1' }));
+  assert.equal((await res.json()).ResultDesc, 'Accepted');
+  assert.equal(dbGet('SELECT status FROM payments WHERE id = ?', [okId]).status, 'completed');
+  assert.equal(
+    dbGet('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ?', [tenant.tenant_id]).c,
+    notesBefore,
+    'a duplicate callback has no financial side effects'
+  );
+});
+
+await test('regression: public listing and landlord self-listing still work', async () => {
+  const landlord = await makeLandlord('list.l@test.ke');
+  const prop = await makeProperty(landlord, 'Regression Listing Court', 'Kisumu');
+
+  const pub = await fetch(`${base}/api/market/properties`);
+  assert.equal(pub.status, 200);
+  assert.ok((await pub.json()).properties.map((p) => p.id).includes(prop.id), 'active property appears publicly');
+
+  const own = await landlord.request('GET', '/api/properties');
+  assert.equal(own.status, 200);
+  assert.ok((await own.json()).properties.map((p) => p.id).includes(prop.id), 'landlord still lists their own property');
 });
 
 server.close();

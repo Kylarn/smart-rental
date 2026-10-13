@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { UserCog, Plus, Search, ShieldCheck, Ban, Trash2, Pencil } from 'lucide-react';
+import { UserCog, Plus, Search, ShieldCheck, Ban, Trash2, Pencil, CheckCircle2, XCircle } from 'lucide-react';
 import { api, qs } from '../lib/api.js';
 import { date, titleCase } from '../lib/format.js';
 import { useToast } from '../context/ToastContext.jsx';
@@ -15,11 +15,12 @@ export default function AdminUsers() {
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [pendingOnly, setPendingOnly] = useState(false);
 
   const load = () => {
     setLoading(true);
     api
-      .get(`/api/admin/users${qs({ role: role === 'all' ? '' : role, search })}`)
+      .get(`/api/admin/users${qs({ role: role === 'all' ? '' : role, search, approval_status: pendingOnly ? 'pending' : '' })}`)
       .then((d) => setUsers(d.users || []))
       .catch(() => setUsers([]))
       .finally(() => setLoading(false));
@@ -29,12 +30,22 @@ export default function AdminUsers() {
     const t = setTimeout(load, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role, search]);
+  }, [role, search, pendingOnly]);
 
   const toggleSuspend = async (u) => {
     try {
       await api.patch(`/api/admin/users/${u.id}`, { status: u.status === 'suspended' ? 'active' : 'suspended' });
       toast.success(u.status === 'suspended' ? 'Account reactivated' : 'Account suspended');
+      load();
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
+  const setApproval = async (u, approval_status) => {
+    try {
+      await api.patch(`/api/admin/users/${u.id}`, { approval_status });
+      toast.success(approval_status === 'approved' ? 'Landlord approved' : 'Landlord rejected');
       load();
     } catch (err) {
       toast.error(err.message);
@@ -77,6 +88,9 @@ export default function AdminUsers() {
           onChange={setRole}
         />
         <Input placeholder="Search name, email, phone…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ maxWidth: 280 }} />
+        <Button variant={pendingOnly ? 'primary' : 'secondary'} onClick={() => setPendingOnly((v) => !v)}>
+          <ShieldCheck size={16} /> Pending approval
+        </Button>
       </div>
 
       {loading ? (
@@ -87,7 +101,7 @@ export default function AdminUsers() {
         <Card padded={false}>
           <div className="table-wrap">
             <table className="data">
-              <thead><tr><th>User</th><th>Role</th><th>Contact</th><th>Portfolio</th><th>Status</th><th>Joined</th><th></th></tr></thead>
+              <thead><tr><th>User</th><th>Role</th><th>Contact</th><th>Portfolio</th><th>Status</th><th>Approval</th><th>Joined</th><th></th></tr></thead>
               <tbody>
                 {users.map((u) => (
                   <tr key={u.id}>
@@ -103,8 +117,19 @@ export default function AdminUsers() {
                       {u.role === 'landlord' ? `${u.properties} properties` : u.role === 'tenant' ? `${u.leases} leases` : '—'}
                     </td>
                     <td><StatusBadge status={u.status} /></td>
+                    <td>
+                      {u.role === 'landlord'
+                        ? <Badge tone={u.approval_status === 'approved' ? 'green' : u.approval_status === 'rejected' ? 'red' : 'amber'}>{titleCase(u.approval_status || 'approved')}</Badge>
+                        : '—'}
+                    </td>
                     <td className="cell-muted">{date(u.created_at)}</td>
                     <td className="row-actions">
+                      {u.role === 'landlord' && u.approval_status !== 'approved' && (
+                        <Button size="sm" variant="ghost" title="Approve" onClick={() => setApproval(u, 'approved')}><CheckCircle2 size={15} /></Button>
+                      )}
+                      {u.role === 'landlord' && u.approval_status === 'pending' && (
+                        <Button size="sm" variant="ghost" title="Reject" onClick={() => setApproval(u, 'rejected')}><XCircle size={15} /></Button>
+                      )}
                       <Button size="sm" variant="ghost" title="Edit" onClick={() => setEditing(u)}><Pencil size={15} /></Button>
                       <Button size="sm" variant="ghost" title={u.status === 'suspended' ? 'Reactivate' : 'Suspend'} onClick={() => toggleSuspend(u)}>
                         {u.status === 'suspended' ? <ShieldCheck size={15} /> : <Ban size={15} />}

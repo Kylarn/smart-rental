@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Receipt, RefreshCw } from 'lucide-react';
+import { Receipt, RefreshCw, Smartphone } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { kes, monthLabel, date } from '../lib/format.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { Button, Card, Spinner, EmptyState, Badge, StatusBadge, StatCard } from '../components/ui.jsx';
+import PayBillModal from '../components/PayBillModal.jsx';
 
 export default function MyBills() {
   const toast = useToast();
   const [bills, setBills] = useState([]);
   const [stats, setStats] = useState({ unpaid: 0, paid: 0, payable: 0 });
   const [loading, setLoading] = useState(true);
+  const [payBill, setPayBill] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -60,7 +62,7 @@ export default function MyBills() {
           <div className="table-wrap">
             <table className="data">
               <thead>
-                <tr><th>Period</th><th>Property</th><th>Unit</th><th>Category</th><th className="text-right">Amount</th><th>Status</th><th>Paid on</th></tr>
+                <tr><th>Period</th><th>Property</th><th>Unit</th><th>Category</th><th className="text-right">Amount</th><th>Status</th><th>Paid on</th><th></th></tr>
               </thead>
               <tbody>
                 {bills.map((b) => (
@@ -72,6 +74,11 @@ export default function MyBills() {
                     <td className="text-right cell-strong">{kes(b.amount)}</td>
                     <td><StatusBadge status={b.status} label={b.status === 'paid' ? 'Paid' : 'Unpaid'} /></td>
                     <td className="cell-muted">{b.status === 'paid' ? date(b.paid_at) : '—'}</td>
+                    <td className="row-actions">
+                      {b.status === 'unpaid' ? (
+                        <Button size="sm" onClick={() => setPayBill(b)}><Smartphone size={14} /> Pay</Button>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -81,8 +88,10 @@ export default function MyBills() {
       </Card>
 
       <p className="cell-muted mt-16">
-        To settle a bill, pay your landlord or caretaker directly (M-Pesa, cash or bank) and they will mark it as paid.
+        Pay any unpaid bill directly with M-Pesa using the Pay button. You can also settle with your landlord or caretaker (cash or bank), who will mark it as paid.
       </p>
+
+      <PayBillModal bill={payBill} onClose={() => setPayBill(null)} onPaid={load} />
     </>
   );
 }

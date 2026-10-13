@@ -41,9 +41,12 @@ export const requireAuth = asyncHandler(async (req, _res, next) => {
   } catch {
     throw unauthorized('Your session has expired. Please sign in again.');
   }
-  const user = get('SELECT id, role, full_name, email, phone, status, avatar_url, county, id_number, bio, sms_opt_out FROM users WHERE id = ?', [payload.id]);
+  const user = get('SELECT id, role, full_name, email, phone, status, approval_status, avatar_url, county, id_number, bio, sms_opt_out FROM users WHERE id = ?', [payload.id]);
   if (!user) throw unauthorized('Account no longer exists');
   if (user.status === 'suspended') throw forbidden('This account has been suspended. Contact support for assistance.');
+  if (user.approval_status && user.approval_status !== 'approved') {
+    throw forbidden('Your account is awaiting admin approval.');
+  }
   req.user = user;
   next();
 });
@@ -61,8 +64,8 @@ export const optionalAuth = asyncHandler(async (req, _res, next) => {
   if (token) {
     try {
       const payload = jwt.verify(token, config.jwtSecret);
-      const user = get('SELECT id, role, full_name, email, phone, status, avatar_url, county, id_number, bio, sms_opt_out FROM users WHERE id = ?', [payload.id]);
-      if (user && user.status === 'active') req.user = user;
+      const user = get('SELECT id, role, full_name, email, phone, status, approval_status, avatar_url, county, id_number, bio, sms_opt_out FROM users WHERE id = ?', [payload.id]);
+      if (user && user.status === 'active' && user.approval_status === 'approved') req.user = user;
     } catch {
       /* ignore */
     }

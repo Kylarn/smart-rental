@@ -40,7 +40,15 @@ export function createApp() {
       : [config.clientOrigin, 'http://localhost:5173', 'http://127.0.0.1:5173'];
 
   app.use(cors({ origin: trustedOrigins, credentials: true }));
-  app.use(express.json({ limit: '2mb' }));
+  app.use(
+    express.json({
+      limit: '2mb',
+      verify: (req, _res, buf) => {
+        // Preserve the exact bytes so webhook handlers can verify provider signatures.
+        req.rawBody = buf;
+      },
+    })
+  );
   app.use(cookieParser());
 
   app.use(

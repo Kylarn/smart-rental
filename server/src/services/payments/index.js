@@ -25,6 +25,12 @@ export function nextReceiptNumber() {
   return `SR-${ymd}-${String(row.c + 1).padStart(4, '0')}`;
 }
 
+function monthLabel(period) {
+  return /^\d{4}-\d{2}$/.test(String(period || ''))
+    ? new Date(`${period}-01T00:00:00`).toLocaleDateString('en-KE', { month: 'long', year: 'numeric' })
+    : '';
+}
+
 export function completePayment(paymentId, extra = {}) {
   const payment = get('SELECT * FROM payments WHERE id = ?', [paymentId]);
   if (!payment) return null;
@@ -39,9 +45,48 @@ export function completePayment(paymentId, extra = {}) {
 
   const updated = get('SELECT * FROM payments WHERE id = ?', [paymentId]);
   const tenant = get('SELECT id, full_name FROM users WHERE id = ?', [payment.tenant_id]);
-  const periodLabel = /^\d{4}-\d{2}$/.test(String(payment.period || ''))
-    ? new Date(`${payment.period}-01T00:00:00`).toLocaleDateString('en-KE', { month: 'long', year: 'numeric' })
-    : '';
+  const periodLabel = monthLabel(payment.period);
+
+  if (updated.utility_bill_id) {
+    const bill = get('SELECT * FROM utility_bills WHERE id = ?', [updated.utility_bill_id]);
+    if (bill && bill.status !== 'paid') {
+      run(
+        `UPDATE utility_bills SET status = 'paid', paid_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+           payment_method = 'mpesa', payment_reference = ?, paid_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         WHERE id = ?`,
+        [receipt, payment.tenant_id, bill.id]
+      );
+      notify(bill.tenant_id, {
+        type: 'success',
+        title: 'Bill paid',
+        body: `Your ${String(bill.category).toLowerCase()} bill of KES ${Number(bill.amount).toLocaleString('en-KE')} for ${monthLabel(bill.period)} was paid via M-Pesa. Receipt ${receipt}.`,
+        link: '/app/my-bills',
+        dedupeKey: `bill-paid-${bill.id}`,
+      });
+      if (bill.property_id) {
+        all('SELECT landlord_id FROM properties WHERE id = ?', [bill.property_id]).forEach((p) =>
+          notify(p.landlord_id, {
+            type: 'success',
+            title: 'Utility bill collected',
+            body: `${tenant?.full_name || 'A tenant'} paid the ${String(bill.category).toLowerCase()} bill of KES ${Number(bill.amount).toLocaleString('en-KE')} for ${monthLabel(bill.period)} via M-Pesa. Receipt ${receipt}.`,
+            link: '/app/bills',
+            dedupeKey: `bill-landlord-${bill.id}`,
+          })
+        );
+      }
+      smsEvents.billPaid({
+        userId: bill.tenant_id,
+        billId: bill.id,
+        propertyId: bill.property_id,
+        category: bill.category,
+        periodLabel: monthLabel(bill.period),
+        amount: bill.amount,
+      });
+      auditLog(null, 'utility_bill.paid', 'utility_bill', bill.id, { method: 'mpesa', receipt, amount: bill.amount, period: bill.period }, null, bill.property_id, null);
+    }
+    if (extra.onComplete) extra.onComplete(updated);
+    return updated;
+  }
 
   notify(payment.tenant_id, {
     type: 'success',

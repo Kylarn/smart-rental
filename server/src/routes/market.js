@@ -3,7 +3,7 @@ import { all, get, insert } from '../db/index.js';
 import { asyncHandler, validate, notFound, badRequest, normalizePhone } from '../utils/helpers.js';
 import { optionalAuth } from '../middleware/auth.js';
 import { rateLimit, envMax } from '../middleware/rateLimit.js';
-import { notify, audit } from '../services/notify.js';
+import { notify, notifyMany, audit } from '../services/notify.js';
 import { smsEvents } from '../services/sms/events.js';
 import { parseJson } from '../utils/helpers.js';
 
@@ -92,13 +92,19 @@ router.get(
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const property = get(
-      `SELECT p.*, u.full_name AS landlord_name, u.phone AS landlord_phone, u.email AS landlord_email, u.avatar_url AS landlord_avatar
+      `SELECT p.*, u.full_name AS landlord_name, u.phone AS landlord_phone, u.avatar_url AS landlord_avatar
        FROM properties p JOIN users u ON u.id = p.landlord_id
        WHERE p.id = ? AND p.status = 'active'`,
       [id]
     );
     if (!property) throw notFound('Property not found');
-    const units = all('SELECT * FROM units WHERE property_id = ? ORDER BY CAST(unit_number AS INTEGER), unit_number', [id]);
+    const units = all(
+      `SELECT id, unit_number, floor, unit_type, bedrooms, rent, deposit, size_sqm, description, status, amenities
+       FROM units
+       WHERE property_id = ? AND status = 'vacant' AND COALESCE(occupancy_known, 1) = 1
+       ORDER BY CAST(unit_number AS INTEGER), unit_number`,
+      [id]
+    );
     const applications = req.user
       ? all('SELECT * FROM applications WHERE property_id = ? AND applicant_id = ?', [id, req.user.id])
       : [];
@@ -113,7 +119,6 @@ router.get(
         id: property.landlord_id,
         name: property.landlord_name,
         phone: property.landlord_phone,
-        email: property.landlord_email,
         avatar: property.landlord_avatar,
       },
     });
@@ -186,6 +191,14 @@ router.post(
       link: '/landlord/applications',
       dedupeKey: `application-${applicationId}`,
     });
+    const caretakers = all('SELECT caretaker_id FROM property_caretakers WHERE property_id = ?', [id]);
+    notifyMany(caretakers.map((c) => c.caretaker_id), {
+      type: 'application',
+      title: 'New rental application',
+      body: `${req.body.full_name} applied to rent at ${property.name}.`,
+      link: '/caretaker/applications',
+      dedupeKey: `application-caretaker-${applicationId}`,
+    });
     if (applicantId) {
       notify(applicantId, {
         type: 'application',
@@ -248,34 +261,30 @@ router.post(
       message: { required: true, label: 'Message', minLength: 10 },
     });
     const senderId = req.user?.id;
-    let senderIdFinal = senderId;
-    if (!senderIdFinal) {
-      senderIdFinal = insert(
-        `INSERT INTO users (role, full_name, email, phone, password_hash, status) VALUES ('tenant', ?, ?, ?, ?, 'active')`,
-        [
-          String(req.body.name).trim(),
-          String(req.body.email).trim().toLowerCase(),
-          normalizePhone(req.body.phone),
-          await bcryptHash(),
-        ]
+    const email = String(req.body.email).trim().toLowerCase();
+    const phone = normalizePhone(req.body.phone);
+    if (senderId) {
+      const messageId = insert(
+        `INSERT INTO messages (sender_id, recipient_id, subject, body) VALUES (?, ?, ?, ?)`,
+        [senderId, property.landlord_id, `Enquiry about ${property.name}`, String(req.body.message).trim()]
       );
+      notify(property.landlord_id, {
+        type: 'message',
+        title: 'New property enquiry',
+        body: `${String(req.body.name).trim()} sent a message about ${property.name}.`,
+        link: '/landlord/messages',
+        dedupeKey: `msg-${messageId}`,
+      });
+      audit(req, 'message.sent', 'message', messageId, { to: property.landlord_id }, { property_id: id });
+    } else {
+      notify(property.landlord_id, {
+        type: 'message',
+        title: 'New property enquiry',
+        body: `${String(req.body.name).trim()} (${email}, ${phone}) sent a message about ${property.name}: ${String(req.body.message).trim()}`,
+        link: '/landlord/messages',
+      });
+      audit(req, 'enquiry.created', 'property', id, { type: 'contact', name: String(req.body.name).trim(), email, phone }, { property_id: id });
     }
-    const messageId = insert(
-      `INSERT INTO messages (sender_id, recipient_id, subject, body) VALUES (?, ?, ?, ?)`,
-      [
-        senderIdFinal,
-        property.landlord_id,
-        `Enquiry about ${property.name}`,
-        String(req.body.message).trim(),
-      ]
-    );
-    notify(property.landlord_id, {
-      type: 'message',
-      title: 'New property enquiry',
-      body: `${req.body.name} sent a message about ${property.name}.`,
-      link: '/landlord/messages',
-      dedupeKey: `msg-${messageId}`,
-    });
     res.status(201).json({ ok: true, message: 'Your message has been sent to the landlord.' });
   })
 );
@@ -294,38 +303,35 @@ router.post(
       viewing_date: { required: true, label: 'Preferred viewing date' },
     });
     const senderId = req.user?.id;
-    let senderIdFinal = senderId;
-    if (!senderIdFinal) {
-      senderIdFinal = insert(
-        `INSERT INTO users (role, full_name, email, phone, password_hash, status) VALUES ('tenant', ?, ?, ?, ?, 'active')`,
-        [
-          String(req.body.name).trim(),
-          String(req.body.email || `viewing-${Date.now()}@smartrentals.local`).trim().toLowerCase(),
-          normalizePhone(req.body.phone),
-          await bcryptHash(),
-        ]
-      );
+    const note = `Preferred date: ${req.body.viewing_date}\n\n${req.body.message || ''}`.trim();
+    if (senderId) {
+      const messageId = insert(`INSERT INTO messages (sender_id, recipient_id, subject, body) VALUES (?, ?, ?, ?)`, [
+        senderId,
+        property.landlord_id,
+        `Viewing request for ${property.name}`,
+        note,
+      ]);
+      notify(property.landlord_id, {
+        type: 'application',
+        title: 'New viewing request',
+        body: `${String(req.body.name).trim()} would like to view ${property.name} on ${req.body.viewing_date}.`,
+        link: '/landlord/messages',
+        dedupeKey: `viewing-${messageId}`,
+      });
+      audit(req, 'message.sent', 'message', messageId, { to: property.landlord_id }, { property_id: id });
+    } else {
+      const phone = normalizePhone(req.body.phone);
+      const email = req.body.email ? String(req.body.email).trim().toLowerCase() : null;
+      notify(property.landlord_id, {
+        type: 'application',
+        title: 'New viewing request',
+        body: `${String(req.body.name).trim()} (${phone}${email ? `, ${email}` : ''}) would like to view ${property.name} on ${req.body.viewing_date}.`,
+        link: '/landlord/messages',
+      });
+      audit(req, 'enquiry.created', 'property', id, { type: 'viewing', name: String(req.body.name).trim(), phone, email, viewing_date: req.body.viewing_date }, { property_id: id });
     }
-    const messageId = insert(`INSERT INTO messages (sender_id, recipient_id, subject, body) VALUES (?, ?, ?, ?)`, [
-      senderIdFinal,
-      property.landlord_id,
-      `Viewing request for ${property.name}`,
-      `Preferred date: ${req.body.viewing_date}\n\n${req.body.message || ''}`.trim(),
-    ]);
-    notify(property.landlord_id, {
-      type: 'application',
-      title: 'New viewing request',
-      body: `${req.body.name} would like to view ${property.name} on ${req.body.viewing_date}.`,
-      link: '/landlord/messages',
-      dedupeKey: `viewing-${messageId}`,
-    });
     res.status(201).json({ ok: true, message: 'Viewing request sent! The landlord will confirm shortly.' });
   })
 );
-
-async function bcryptHash() {
-  const { default: bcrypt } = await import('bcryptjs');
-  return bcrypt.hash(`tmp-${Math.random().toString(36).slice(2)}`, 10);
-}
 
 export default router;

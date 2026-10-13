@@ -60,7 +60,7 @@ Automated texts are queued asynchronously (never blocking the request) whenever 
 - **Maintenance update** — when a request changes status.
 - **Account activation** — the tenant's single-use link.
 
-Each message is deduped (so retries don't double-send), stored in `sms_messages` with state `queued → sent → delivered` (or `failed`, retried up to `SMS_MAX_ATTEMPTS`), and scoped by role: admins see all, landlords see their portfolio, caretakers their assigned properties, tenants their own. The active gateway is chosen by `SMS_PROVIDER` (or the admin setting); the default `mock` provider logs the text and marks it **simulated** — no real SMS is sent. A gateway can post delivery receipts to `POST /api/sms/webhook`.
+Each message is deduped (so retries don't double-send), stored in `sms_messages` with state `queued → sent → delivered` (or `failed`, retried up to `SMS_MAX_ATTEMPTS`), and scoped by role: admins see all, landlords see their portfolio, caretakers their assigned properties, tenants their own. The active gateway is chosen by `SMS_PROVIDER` (or the admin setting); the default `mock` provider logs the text and marks it **simulated** — no real SMS is sent. A gateway can post delivery receipts to `POST /api/sms/webhook`, which requires an HMAC-SHA256 signature (`SMS_WEBHOOK_SECRET`); unsigned or invalid requests are rejected and `delivered`/`failed` are terminal.
 
 ## Tenant account activation
 
@@ -73,7 +73,7 @@ When staff add a tenant without a password, the server mints a token (`account_a
 - Tenants only see their own leases/payments/applications; they cannot decide applications.
 - Payments: `activeLeaseOfTenant` targets the **newest** active lease for M-Pesa initialization; listing endpoints show all active leases.
 - Utility bills: staff are scoped to their properties; the `tenant_id` is always derived from the unit's active lease (`activeLeaseOfUnit`), never from the request body; a unit can have at most one bill per period + category; paid bills cannot be edited or deleted.
-- Receipts exist only for completed payments and only for the owner; M-Pesa callbacks are idempotent; failed/amount-mismatched callbacks cannot complete a payment.
+- Receipts exist only for completed payments and only for the owner; M-Pesa callbacks are idempotent and are never trusted alone — a callback only completes a payment after the server correlates it to a pending payment and confirms success server-to-server via the Daraja STK Push Query API. Unverified callbacks, unknown references, and amount/mismatched callbacks cannot complete a payment.
 - Uploads require auth, validate real content types, and store files under unguessable names.
 - Public applications require no login, are rate-limited, reject duplicates for the same property + contact details, and expose only public listing data; a unit's availability is rechecked on submit and again on approval.
 - SMS history is role-scoped (`/api/sms`), opt-out is respected at send time, and mock deliveries are always flagged `simulated`. Activation tokens are single-use, expiring, and never reveal whether an account exists.

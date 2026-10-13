@@ -106,7 +106,7 @@ async function landlordDashboard(landlordId) {
                 (SELECT COUNT(*) FROM units WHERE property_id = p.id AND status = 'occupied') AS occupied,
                 (SELECT COUNT(*) FROM units WHERE property_id = p.id AND COALESCE(occupancy_known,1) = 0) AS unknown,
                 (SELECT COALESCE(SUM(rent),0) FROM units WHERE property_id = p.id AND status = 'occupied') AS monthly_rent,
-                (SELECT COALESCE(SUM(amount),0) FROM payments WHERE property_id = p.id AND status = 'completed'
+                (SELECT COALESCE(SUM(amount),0) FROM payments WHERE property_id = p.id AND status = 'completed' AND utility_bill_id IS NULL
                    AND paid_at >= strftime('%Y-%m-01')) AS collected_month,
                 (SELECT COALESCE(SUM(amount),0) FROM expenses WHERE property_id = p.id
                    AND date(expense_date) >= date('now','start of month')) AS expenses_month,
@@ -182,7 +182,7 @@ async function caretakerDashboard(caretakerId) {
                 (SELECT COUNT(*) FROM units WHERE property_id = p.id AND status = 'occupied') AS occupied,
                 (SELECT COUNT(*) FROM units WHERE property_id = p.id AND COALESCE(occupancy_known,1) = 0) AS unknown,
                 (SELECT COALESCE(SUM(rent),0) FROM units WHERE property_id = p.id AND status = 'occupied') AS monthly_rent,
-                (SELECT COALESCE(SUM(amount),0) FROM payments WHERE property_id = p.id AND status = 'completed'
+                (SELECT COALESCE(SUM(amount),0) FROM payments WHERE property_id = p.id AND status = 'completed' AND utility_bill_id IS NULL
                    AND paid_at >= strftime('%Y-%m-01')) AS collected_month,
                 (SELECT COALESCE(SUM(amount),0) FROM expenses WHERE property_id = p.id
                    AND date(expense_date) >= date('now','start of month')) AS expenses_month,
@@ -354,6 +354,21 @@ async function tenantDashboard(tenantId) {
     : [];
   const applications = all('SELECT * FROM applications WHERE applicant_id = ? ORDER BY created_at DESC', [tenantId]);
 
+  const utilityBills = all(
+    `SELECT b.id, b.category, b.period, b.amount, b.status, b.paid_at, b.payment_method
+     FROM utility_bills b
+     WHERE b.tenant_id = ?
+     ORDER BY CASE WHEN b.status = 'unpaid' THEN 0 ELSE 1 END, b.period DESC, b.id DESC
+     LIMIT 8`,
+    [tenantId]
+  );
+  const billStats = get(
+    `SELECT COALESCE(SUM(CASE WHEN status = 'unpaid' THEN amount ELSE 0 END),0) AS unpaid,
+            COALESCE(SUM(CASE WHEN status = 'unpaid' THEN 1 ELSE 0 END),0) AS open
+     FROM utility_bills WHERE tenant_id = ?`,
+    [tenantId]
+  ) || { unpaid: 0, open: 0 };
+
   return {
     stats: {
       ...stats,
@@ -361,11 +376,15 @@ async function tenantDashboard(tenantId) {
       maintenance_total: Number(maintenanceStats.total || 0),
       applications: applications.length,
       applications_pending: applications.filter((a) => ['pending', 'under_review', 'info_requested'].includes(a.status)).length,
+      utility_bills: utilityBills.length,
+      utility_bills_open: Number(billStats.open || 0),
+      utility_bills_due: Number(billStats.unpaid || 0),
     },
     payments,
     maintenance,
     announcements,
     applications,
+    utilityBills,
     unreadNotifications: unreadCount(tenantId),
   };
 }

@@ -45,6 +45,11 @@ export function validateEnvConfig(env, values = {}) {
     if (!process.env.SMS_API_URL || !process.env.SMS_API_KEY) {
       errors.push('SMS_API_URL and SMS_API_KEY are required in production when SMS_PROVIDER=http');
     }
+    if (!process.env.SMS_WEBHOOK_SECRET) {
+      warnings.push(
+        'SMS_WEBHOOK_SECRET is not set: the delivery-status webhook at POST /api/sms/webhook will reject every callback (fail closed)'
+      );
+    }
   } else if (smsProvider !== 'disabled' && smsProvider !== '') {
     warnings.push(`Unknown SMS_PROVIDER "${smsProvider}": falling back to mock mode`);
   }

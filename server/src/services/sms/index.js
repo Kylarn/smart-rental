@@ -127,14 +127,20 @@ export async function flushSmsQueue(limit = 25) {
   }
 }
 
+const FINAL_SMS_STATUSES = new Set(['delivered', 'failed']);
+const ALLOWED_SMS_STATUSES = new Set(['queued', 'sent', 'delivered', 'failed']);
+
 export function markSmsDelivery({ providerMessageId, status }) {
-  if (!providerMessageId) return false;
-  const row = get('SELECT id FROM sms_messages WHERE provider_message_id = ?', [String(providerMessageId)]);
-  if (!row) return false;
-  const next = status === 'delivered' ? 'delivered' : status === 'failed' ? 'failed' : 'sent';
+  if (!providerMessageId) return { updated: false, reason: 'missing_provider_id' };
+  if (!ALLOWED_SMS_STATUSES.has(status)) return { updated: false, reason: 'invalid_status' };
+  const row = get('SELECT id, status FROM sms_messages WHERE provider_message_id = ?', [String(providerMessageId)]);
+  if (!row) return { updated: false, reason: 'unknown_message' };
+  // Never let a later webhook overwrite a final delivery state.
+  if (FINAL_SMS_STATUSES.has(row.status)) return { updated: false, reason: 'already_final' };
+  if (row.status === status) return { updated: false, reason: 'no_change' };
   run(
     `UPDATE sms_messages SET status = ?, delivered_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
-    [next, next === 'delivered' ? new Date().toISOString() : null, row.id]
+    [status, status === 'delivered' ? new Date().toISOString() : null, row.id]
   );
-  return true;
+  return { updated: true, reason: 'ok', id: row.id, status };
 }

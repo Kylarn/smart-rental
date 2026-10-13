@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -189,6 +190,15 @@ const seeded = spawnSync(process.execPath, [path.join(root, 'server', 'src', 'db
 if (seeded.status !== 0) {
   console.error('Failed to seed disposable database; aborting.');
   process.exit(1);
+}
+
+// The seed uses the real tenant register and does not set landlord_approval, whose
+// default is "on". Turn it off so the disposable fixture can register and then log
+// in as a landlord without an admin approval step.
+{
+  const db = new DatabaseSync(dbPath);
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('landlord_approval', 'false')").run();
+  db.close();
 }
 
 let server = startServer();

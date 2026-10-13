@@ -2,6 +2,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # Local database and SQLite journal files
 data.db

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Building2,
@@ -12,9 +12,11 @@ import {
   Menu,
   X,
   LayoutDashboard,
+  MapPin,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Button } from '../components/ui.jsx';
+import { Button, Spinner } from '../components/ui.jsx';
+import { api } from '../lib/api.js';
 import { kes } from '../lib/format.js';
 
 const MOCK_PAYMENTS = [
@@ -26,6 +28,27 @@ const MOCK_PAYMENTS = [
 export default function Home() {
   const { user } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [listings, setListings] = useState([]);
+  const [listingsLoading, setListingsLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .get('/api/market/properties?sort=newest')
+      .then((data) => {
+        const available = (data.properties || []).filter((p) => Number(p.available_units || 0) > 0);
+        if (active) setListings(available.slice(0, 6));
+      })
+      .catch(() => {
+        if (active) setListings([]);
+      })
+      .finally(() => {
+        if (active) setListingsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <div className="hp">
@@ -42,6 +65,7 @@ export default function Home() {
 
           <nav className="hp-links" aria-label="Main navigation">
             <a href="#hero">Home</a>
+            <a href="#listings">Available units</a>
             <a href="#features">Features</a>
             <a href="#about">About</a>
           </nav>
@@ -83,6 +107,7 @@ export default function Home() {
         {menuOpen ? (
           <nav className="hp-mobile" aria-label="Mobile navigation">
             <a href="#hero" onClick={() => setMenuOpen(false)}>Home</a>
+            <a href="#listings" onClick={() => setMenuOpen(false)}>Available units</a>
             <a href="#features" onClick={() => setMenuOpen(false)}>Features</a>
             <a href="#about" onClick={() => setMenuOpen(false)}>About</a>
             {user ? (
@@ -128,6 +153,35 @@ export default function Home() {
             <div className="hp-hero-visual" aria-hidden="true">
               <DashboardMockup />
             </div>
+          </div>
+        </section>
+
+        <section className="hp-section hp-alt" id="listings" aria-labelledby="hp-listings-title">
+          <div className="hp-wrap">
+            <div className="hp-head">
+              <span className="hp-eyebrow">Available now</span>
+              <h2 id="hp-listings-title">Find your next home</h2>
+              <p>Browse vacant units from landlords on Smart Rentals. Apply online in minutes — no account needed to get started.</p>
+            </div>
+
+            {listingsLoading ? (
+              <div className="hp-listings-state">
+                <Spinner label="Loading available rentals…" />
+              </div>
+            ) : listings.length ? (
+              <div className="hp-listings">
+                {listings.map((p) => (
+                  <ListingCard key={p.id} property={p} />
+                ))}
+              </div>
+            ) : (
+              <div className="hp-listings-state">
+                <p className="muted">No units are listed right now. Check back soon.</p>
+                <Link to="/register" onClick={() => setMenuOpen(false)}>
+                  <Button variant="primary" size="sm">List your property</Button>
+                </Link>
+              </div>
+            )}
           </div>
         </section>
 
@@ -190,6 +244,7 @@ export default function Home() {
           </div>
           <nav className="hp-footer-links" aria-label="Footer navigation">
             <a href="#hero">Home</a>
+            <a href="#listings">Available units</a>
             <a href="#features">Features</a>
             <a href="#about">About</a>
             <Link to="/login">Sign In</Link>
@@ -219,6 +274,36 @@ function Step({ n, title, text }) {
       <h3>{title}</h3>
       <p>{text}</p>
     </div>
+  );
+}
+
+function ListingCard({ property: p }) {
+  const location = [p.area, p.county].filter(Boolean).join(', ');
+  const img = p.images?.[0] || null;
+  const available = Number(p.available_units || 0);
+
+  return (
+    <Link to={`/property/${p.id}`} className="property-card hp-listing">
+      <div className="property-thumb">
+        {img ? (
+          <img src={img} alt={p.name} />
+        ) : (
+          <span className="hp-listing-thumb-icon"><Building2 size={34} /></span>
+        )}
+      </div>
+      <div className="property-body">
+        <h3>{p.name}</h3>
+        <span className="property-loc"><MapPin size={14} /> {location || 'Kenya'}</span>
+        <div className="chip-row">
+          <span className="chip"><Building2 size={13} /> {p.property_type}</span>
+          <span className="chip">{available} vacant</span>
+        </div>
+        <div className="property-foot">
+          <div className="price">{p.min_rent ? kes(p.min_rent) : '—'} <small>/mo</small></div>
+          <span className="link">View <ArrowRight size={14} /></span>
+        </div>
+      </div>
+    </Link>
   );
 }
 

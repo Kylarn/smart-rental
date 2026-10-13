@@ -1,9 +1,11 @@
 import express from 'express';
 import { all, get, run } from '../db/index.js';
-import { asyncHandler, badRequest, forbidden, notFound } from '../utils/helpers.js';
+import { asyncHandler, badRequest, forbidden, notFound, unauthorized } from '../utils/helpers.js';
 import { requireAuth } from '../middleware/auth.js';
+import { config } from '../config.js';
 import { audit } from '../services/notify.js';
 import { markSmsDelivery, listSmsProviders, flushSmsQueue, smsEnabled } from '../services/sms/index.js';
+import { verifySmsWebhookSignature } from '../services/sms/webhookAuth.js';
 import { landlordPropertyIds, caretakerPropertyIds, placeholders } from '../services/rent.js';
 
 const router = express.Router();
@@ -97,14 +99,29 @@ router.post(
 router.post(
   '/webhook',
   asyncHandler(async (req, res) => {
+    // 1. Authenticate the sender before touching the database. Fail closed.
+    const signature = verifySmsWebhookSignature({
+      secret: config.sms.webhookSecret,
+      rawBody: req.rawBody,
+      headers: req.headers,
+      toleranceSeconds: config.sms.webhookToleranceSeconds,
+    });
+    if (!signature.ok) {
+      console.warn('[sms:webhook] rejected', { reason: signature.reason, ip: req.ip });
+      throw unauthorized('Invalid webhook signature');
+    }
+
+    // 2. Extract and validate the payload.
     const providerMessageId =
       req.body?.provider_message_id || req.body?.message_id || req.body?.id || req.query.message_id;
-    const status = req.body?.status || req.query.status;
     if (!providerMessageId) throw badRequest('provider_message_id is required');
-    const known = ['sent', 'delivered', 'failed'];
-    const normalized = known.includes(status) ? status : 'sent';
-    const updated = markSmsDelivery({ providerMessageId, status: normalized });
-    res.json({ ok: true, updated });
+    const status = req.body?.status || req.query.status;
+    const allowed = ['sent', 'delivered', 'failed'];
+    if (!allowed.includes(status)) throw badRequest(`status must be one of: ${allowed.join(', ')}`);
+
+    // 3. Apply the transition (idempotent; final states are immutable).
+    const result = markSmsDelivery({ providerMessageId: String(providerMessageId), status });
+    res.json({ ok: true, updated: result.updated, reason: result.reason });
   })
 );
 

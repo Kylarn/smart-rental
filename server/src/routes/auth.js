@@ -2,15 +2,16 @@ import bcrypt from 'bcryptjs';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
-import { get, insert, run } from '../db/index.js';
+import { get, all, insert, run } from '../db/index.js';
 import { asyncHandler, validate, badRequest, conflict, unauthorized, forbidden, normalizePhone } from '../utils/helpers.js';
 import { requireAuth, signToken, setAuthCookie, clearAuthCookie, COOKIE_NAME } from '../middleware/auth.js';
-import { audit } from '../services/notify.js';
+import { audit, notifyMany } from '../services/notify.js';
+import { settingBool } from '../services/settings.js';
 
 const router = express.Router();
 
 const PUBLIC_USER_COLUMNS =
-  'id, role, full_name, email, phone, status, avatar_url, county, id_number, bio, sms_opt_out, created_at';
+  'id, role, full_name, email, phone, status, approval_status, avatar_url, county, id_number, bio, sms_opt_out, created_at';
 
 function publicUser(user) {
   if (!user) return null;
@@ -32,13 +33,31 @@ router.post(
     if (get('SELECT id FROM users WHERE email = ?', [email])) throw conflict('An account with this email already exists');
     const phone = normalizePhone(req.body.phone);
     const password_hash = await bcrypt.hash(String(req.body.password), 10);
+    const needsApproval = role === 'landlord' && settingBool('landlord_approval', true);
     const id = insert(
-      `INSERT INTO users (role, full_name, email, phone, password_hash, county) VALUES (?, ?, ?, ?, ?, ?)`,
-      [role, String(req.body.full_name).trim(), email, phone, password_hash, req.body.county || null]
+      `INSERT INTO users (role, full_name, email, phone, password_hash, county, approval_status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [role, String(req.body.full_name).trim(), email, phone, password_hash, req.body.county || null, needsApproval ? 'pending' : 'approved']
     );
     const user = get(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = ?`, [id]);
+    audit(req, 'auth.register', 'user', id, { role, email, pending: needsApproval });
+    if (needsApproval) {
+      notifyMany(
+        all("SELECT id FROM users WHERE role = 'admin'").map((a) => a.id),
+        {
+          type: 'info',
+          title: 'Landlord awaiting approval',
+          body: `${String(req.body.full_name).trim()} (${email}) registered as a landlord and needs approval.`,
+          link: '/admin/users',
+          dedupeKey: `landlord-pending-${id}`,
+        }
+      );
+      return res.status(201).json({
+        user,
+        pending: true,
+        message: 'Your landlord account has been created and is awaiting admin approval. You can sign in once it is approved.',
+      });
+    }
     setAuthCookie(res, signToken(user));
-    audit(req, 'auth.register', 'user', id, { role, email });
     res.status(201).json({ user });
   })
 );
@@ -58,6 +77,12 @@ router.post(
     if (user.status === 'suspended') {
       throw forbidden('This account has been suspended. Contact support for assistance.');
     }
+    if (user.approval_status === 'pending') {
+      throw forbidden('Your landlord account is awaiting admin approval. You will be able to sign in once it is approved.');
+    }
+    if (user.approval_status === 'rejected') {
+      throw forbidden('Your landlord account application was not approved. Contact support for assistance.');
+    }
     setAuthCookie(res, signToken(user));
     audit(req, 'auth.login', 'user', user.id);
     res.json({ user: publicUser(user) });
@@ -75,7 +100,7 @@ router.get('/me', (req, res) => {
   try {
     const payload = jwt.verify(token, config.jwtSecret);
     const user = get(`SELECT ${PUBLIC_USER_COLUMNS} FROM users WHERE id = ?`, [payload.id]);
-    res.json({ user: user && user.status === 'active' ? user : null });
+    res.json({ user: user && user.status === 'active' && user.approval_status === 'approved' ? user : null });
   } catch {
     res.json({ user: null });
   }

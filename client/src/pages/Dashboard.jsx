@@ -14,12 +14,14 @@ import {
   Bell,
   ClipboardList,
   ReceiptText,
+  Smartphone,
 } from 'lucide-react';
 import { api } from '../lib/api.js';
-import { kes, shortKes, date, timeAgo, titleCase } from '../lib/format.js';
+import { kes, shortKes, date, timeAgo, titleCase, monthLabel } from '../lib/format.js';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Card, StatCard, Spinner, StatusBadge, EmptyState, Progress, Badge } from '../components/ui.jsx';
+import { Card, StatCard, Spinner, StatusBadge, EmptyState, Progress, Badge, Button } from '../components/ui.jsx';
 import { TrendChart, BarsChart, DonutChart } from '../components/Charts.jsx';
+import PayBillModal from '../components/PayBillModal.jsx';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -336,8 +338,9 @@ function CaretakerDashboard({ data, user }) {
 }
 
 function TenantDashboard({ data, user }) {
-  const { stats, payments, maintenance, announcements, applications } = data;
+  const { stats, payments, maintenance, announcements, applications, utilityBills } = data;
   const lease = stats.lease;
+  const [payBill, setPayBill] = useState(null);
 
   return (
     <>
@@ -355,6 +358,7 @@ function TenantDashboard({ data, user }) {
       <div className="grid grid-4">
         <StatCard label="Rent due" value={kes(stats.arrears?.total || 0)} icon={Wallet} tone={stats.arrears?.total ? 'red' : 'green'} hint={stats.arrears?.total ? `${stats.arrears.months} month(s) outstanding` : 'All paid up'} />
         <StatCard label="Monthly rent" value={kes(lease?.rent || 0)} icon={Building2} hint={lease ? `Unit ${lease.unit_number}` : 'No active lease'} />
+        <StatCard label="Utility bills due" value={kes(stats.utility_bills_due || 0)} icon={ReceiptText} tone={stats.utility_bills_due ? 'red' : 'green'} hint={`${stats.utility_bills_open || 0} unpaid bill(s)`} />
         <StatCard label="Open maintenance" value={stats.maintenance_open || 0} icon={Wrench} tone="amber" hint={`${stats.maintenance_total || 0} total`} />
         <StatCard label="My applications" value={stats.applications || 0} icon={Inbox} hint={`${stats.applications_pending || 0} in progress`} />
       </div>
@@ -392,6 +396,30 @@ function TenantDashboard({ data, user }) {
         </Card>
       </div>
 
+      <div className="section-gap">
+        <Card title="Utility bills" action={<Link to="/app/my-bills" className="link small">View all</Link>}>
+          {utilityBills?.length ? (
+            <div className="flex-col">
+              {utilityBills.map((b) => (
+                <div className="unit-row" key={b.id}>
+                  <div>
+                    <strong><Badge tone="gray">{b.category}</Badge> {monthLabel(b.period)}</strong>
+                    <div className="cell-muted">{kes(b.amount)}</div>
+                  </div>
+                  {b.status === 'unpaid' ? (
+                    <Button size="sm" onClick={() => setPayBill(b)}><Smartphone size={14} /> Pay</Button>
+                  ) : (
+                    <StatusBadge status="paid" label="Paid" />
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState icon={ReceiptText} title="No utility bills" message="Water, electricity and other bills for your unit will appear here." />
+          )}
+        </Card>
+      </div>
+
       <div className="grid grid-2 section-gap">
         <Card title="Announcements" action={<Link to="/app/announcements" className="link small">View all</Link>}>
           {announcements?.length ? (
@@ -426,6 +454,8 @@ function TenantDashboard({ data, user }) {
           ) : <EmptyState icon={Wrench} title="No requests" />}
         </Card>
       </div>
+
+      <PayBillModal bill={payBill} onClose={() => setPayBill(null)} onPaid={() => window.location.reload()} />
     </>
   );
 }

@@ -20,6 +20,7 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState({});
+  const [pending, setPending] = useState('');
 
   const submit = async (e) => {
     e.preventDefault();
@@ -27,7 +28,11 @@ export default function Register() {
     setError('');
     setFieldErrors({});
     try {
-      await register(form);
+      const result = await register(form);
+      if (result && result.pending) {
+        setPending(result.message || 'Your account is awaiting admin approval.');
+        return;
+      }
       toast.success('Account created. Welcome!');
       navigate('/app', { replace: true });
     } catch (err) {
@@ -62,6 +67,9 @@ export default function Register() {
         <div className="auth-card">
           <h1>Create account</h1>
           <p>Get started in less than a minute.</p>
+          {pending ? (
+            <div className="notice notice-info mb-16">{pending}</div>
+          ) : (
           <form onSubmit={submit}>
             <Field label="Full name" required error={fieldErrors.full_name}>
               <Input value={form.full_name} onChange={update('full_name')} placeholder="Jane Wanjiku" required />
@@ -99,6 +107,7 @@ export default function Register() {
               Create account
             </Button>
           </form>
+          )}
           <p className="auth-switch">
             Already have an account? <Link to="/login">Sign in</Link>
           </p>

@@ -2025,6 +2025,42 @@ table.data tbody tr:last-child td {
   line-height: 1.55;
 }
 
+/* landing listings */
+.hp-listings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 18px;
+}
+.hp-listing {
+  color: inherit;
+  text-decoration: none;
+}
+.hp-listing .property-thumb {
+  position: relative;
+}
+.hp-listing-thumb-icon {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #9fb0d4;
+}
+.hp-listing .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13.5px;
+}
+.hp-listings-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+  padding: 40px 16px;
+}
+
+
 /* closing band */
 .hp-cta-band {
   background: linear-gradient(150deg, #0f1a30 0%, #1b2c52 60%, #2563eb 140%);

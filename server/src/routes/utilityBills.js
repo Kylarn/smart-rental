@@ -1,8 +1,10 @@
 import express from 'express';
 import { all, get, insert, run } from '../db/index.js';
-import { asyncHandler, badRequest, notFound, forbidden, conflict, validate } from '../utils/helpers.js';
+import { asyncHandler, badRequest, notFound, forbidden, conflict, validate, normalizePhone } from '../utils/helpers.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { audit, notify } from '../services/notify.js';
+import { getProvider, failPayment } from '../services/payments/index.js';
+import '../services/payments/mpesa.js';
 import { smsEvents } from '../services/sms/events.js';
 import { activeLeaseOfUnit, isCaretakerOfProperty, managedPropertyIds, placeholders } from '../services/rent.js';
 
@@ -245,6 +247,69 @@ router.patch(
       audit(req, 'utility_bill.updated', 'utility_bill', bill.id, { fields: keys, ...updates }, { property_id: bill.property_id });
     }
     res.json({ ok: true, bill: get(`${SELECT_BILL} WHERE b.id = ?`, [bill.id]) });
+  })
+);
+
+router.post(
+  '/:id/pay-mpesa',
+  requireRole('tenant'),
+  asyncHandler(async (req, res) => {
+    const bill = get(`${SELECT_BILL} WHERE b.id = ?`, [Number(req.params.id)]);
+    if (!bill) throw notFound('Bill not found');
+    if (bill.tenant_id !== req.user.id) throw forbidden();
+    if (bill.status === 'paid') throw badRequest('This bill has already been paid');
+
+    const phone = normalizePhone(req.body.phone || req.user.phone);
+    if (!phone) throw badRequest('Enter a valid M-Pesa phone number (07XXXXXXXX)', { phone: 'Invalid Kenyan number' });
+
+    const inFlight = get(
+      "SELECT id FROM payments WHERE utility_bill_id = ? AND status IN ('pending','processing')",
+      [bill.id]
+    );
+    if (inFlight) throw conflict('A payment for this bill is already in progress');
+
+    const amount = Number(bill.amount);
+    const paymentId = insert(
+      `INSERT INTO payments (tenant_id, property_id, unit_id, lease_id, amount, period, months_covered, method, provider, status, utility_bill_id, phone, reference)
+       VALUES (?, ?, ?, NULL, ?, ?, 1, 'mpesa', 'mpesa', 'processing', ?, ?, ?)`,
+      [
+        req.user.id,
+        bill.property_id,
+        bill.unit_id,
+        amount,
+        bill.period,
+        bill.id,
+        phone,
+        `BILL-${bill.category}-${bill.period}`,
+      ]
+    );
+
+    let push;
+    try {
+      push = await getProvider('mpesa').stkPush({
+        phone,
+        amount,
+        reference: `${bill.category} ${bill.period}`,
+        accountRef: `SR${bill.unit_number}${req.user.id}`,
+      });
+    } catch (err) {
+      failPayment(paymentId, err.message);
+      throw badRequest(err.message);
+    }
+
+    run('UPDATE payments SET provider_ref = ?, merchant_request_id = ? WHERE id = ?', [
+      push.checkoutRequestId,
+      push.merchantRequestId || null,
+      paymentId,
+    ]);
+    audit(req, 'utility_bill.pay_initiated', 'utility_bill', bill.id, { amount, phone, payment_id: paymentId }, { property_id: bill.property_id });
+
+    res.status(201).json({
+      payment_id: paymentId,
+      message: push.customerMessage,
+      amount,
+      checkout_request_id: push.checkoutRequestId,
+    });
   })
 );
 

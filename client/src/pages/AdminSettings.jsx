@@ -76,7 +76,15 @@ export default function AdminSettings() {
               </Field>
               <Field label="Rent reminder days"><Input type="number" value={settings?.rent_reminder_days || ''} onChange={set('rent_reminder_days')} /></Field>
             </div>
-            <Field label="Lease expiry alert (days)"><Input type="number" value={settings?.lease_expiry_days || ''} onChange={set('lease_expiry_days')} /></Field>
+            <div className="form-row">
+              <Field label="Landlord approval" hint="New landlord sign-ups need admin approval before they can sign in">
+                <Select value={settings?.landlord_approval || 'true'} onChange={set('landlord_approval')}>
+                  <option value="true">Required</option>
+                  <option value="false">Auto-approve</option>
+                </Select>
+              </Field>
+              <Field label="Lease expiry alert (days)"><Input type="number" value={settings?.lease_expiry_days || ''} onChange={set('lease_expiry_days')} /></Field>
+            </div>
             <div className="divider" />
             <h4 className="mb-8">SMS notifications</h4>
             <div className="form-row">
